@@ -1,14 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from TourOps.core.database import get_db
 from typing import List
+from datetime import datetime, timedelta
 from TourOps.schemas.user import UserCreate, UserResponse, Token, LoginRequest, ProfileUpdate, RoleUpdate
 from TourOps.services.auth_service import AuthService
 from TourOps.api.deps import get_current_user, require_admin
 from TourOps.models.user import User, UserRole
-from TourOps.models.trip import Trip
+from TourOps.models.trip import Trip, TripStatus
 from TourOps.models.activity import Activity
 from TourOps.models.template import Template
+from TourOps.models.resource import Guide, Vehicle, Hotel, Restaurant
 
 router = APIRouter()
 
@@ -136,3 +139,66 @@ def delete_user(
 
     db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
     db.commit()
+
+
+@router.get("/admin/stats")
+def admin_stats(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """管理员控制台统计数据"""
+    now = datetime.utcnow()
+    week_ago = now - timedelta(days=7)
+
+    # 用户统计
+    total_users = db.query(func.count(User.id)).scalar()
+    admin_count = db.query(func.count(User.id)).filter(User.role == UserRole.ADMIN).scalar()
+    planner_count = db.query(func.count(User.id)).filter(User.role == UserRole.PLANNER).scalar()
+    new_users_week = db.query(func.count(User.id)).filter(User.created_at >= week_ago).scalar()
+
+    # 行程统计
+    total_trips = db.query(func.count(Trip.id)).scalar()
+    trip_status_counts = {}
+    for s in TripStatus:
+        trip_status_counts[s.value] = db.query(func.count(Trip.id)).filter(Trip.status == s).scalar()
+
+    # 资源统计
+    guide_count = db.query(func.count(Guide.id)).scalar()
+    vehicle_count = db.query(func.count(Vehicle.id)).scalar()
+    hotel_count = db.query(func.count(Hotel.id)).scalar()
+    restaurant_count = db.query(func.count(Restaurant.id)).scalar()
+
+    # 模板统计
+    template_count = db.query(func.count(Template.id)).scalar()
+
+    # 最近注册用户
+    recent_users = db.query(User).order_by(User.created_at.desc()).limit(5).all()
+
+    return {
+        "users": {
+            "total": total_users,
+            "admins": admin_count,
+            "planners": planner_count,
+            "new_this_week": new_users_week,
+        },
+        "trips": {
+            "total": total_trips,
+            "by_status": trip_status_counts,
+        },
+        "resources": {
+            "guides": guide_count,
+            "vehicles": vehicle_count,
+            "hotels": hotel_count,
+            "restaurants": restaurant_count,
+            "total": guide_count + vehicle_count + hotel_count + restaurant_count,
+        },
+        "templates": template_count,
+        "recent_users": [
+            {
+                "id": u.id,
+                "username": u.username,
+                "name": u.name,
+                "role": u.role.value,
+                "avatar": u.avatar,
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+            }
+            for u in recent_users
+        ],
+    }

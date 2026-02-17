@@ -5,7 +5,7 @@ from typing import List
 from datetime import date
 import secrets
 from TourOps.core.database import get_db
-from TourOps.api.deps import get_current_user
+from TourOps.api.deps import get_current_user, require_admin
 from TourOps.models.user import User
 from TourOps.models.trip import Trip, TripStatus
 from TourOps.models.activity import Activity
@@ -164,3 +164,82 @@ def copy_trip(trip_id: int, db: Session = Depends(get_db), current_user: User = 
     db.commit()
     db.refresh(new_trip)
     return new_trip
+
+
+# ==================== 管理员接口 ====================
+
+@router.get("/admin/all")
+def admin_list_all_trips(
+    status: str | None = Query(None, description="按状态筛选"),
+    keyword: str | None = Query(None, description="搜索关键词"),
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """管理员查看所有行程"""
+    query = db.query(Trip)
+    if status:
+        query = query.filter(Trip.status == status)
+    if keyword:
+        query = query.filter(Trip.name.contains(keyword))
+    trips = query.order_by(Trip.created_at.desc()).all()
+
+    # 附带创建者信息
+    user_ids = list({t.created_by for t in trips})
+    users_map = {}
+    if user_ids:
+        from TourOps.models.user import User as UserModel
+        users = db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
+        users_map = {u.id: {"id": u.id, "username": u.username, "name": u.name, "avatar": u.avatar} for u in users}
+
+    result = []
+    for t in trips:
+        activity_count = db.query(Activity).filter(Activity.trip_id == t.id).count()
+        result.append({
+            "id": t.id,
+            "name": t.name,
+            "start_date": t.start_date.isoformat() if t.start_date else None,
+            "end_date": t.end_date.isoformat() if t.end_date else None,
+            "guest_count": t.guest_count,
+            "budget": float(t.budget) if t.budget else None,
+            "status": t.status.value,
+            "share_code": t.share_code,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "activity_count": activity_count,
+            "creator": users_map.get(t.created_by),
+        })
+    return result
+
+
+@router.put("/admin/{trip_id}/status")
+def admin_update_trip_status(
+    trip_id: int,
+    status_in: TripUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """管理员修改行程状态"""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="行程不存在")
+    if status_in.status:
+        trip.status = status_in.status
+    db.commit()
+    db.refresh(trip)
+    return {"id": trip.id, "status": trip.status.value}
+
+
+@router.delete("/admin/{trip_id}")
+def admin_delete_trip(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """管理员删除行程"""
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="行程不存在")
+    # 先删活动再删行程
+    db.query(Activity).filter(Activity.trip_id == trip_id).delete(synchronize_session=False)
+    db.delete(trip)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

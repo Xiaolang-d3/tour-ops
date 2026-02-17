@@ -49,30 +49,95 @@ class ExportService:
         self._font_name = self._register_fonts()
 
     def _register_fonts(self) -> str:
-        """注册中文字体，返回可用的字体名"""
-        font_paths = [
+        """注册中文字体，返回可用的字体名（支持 Windows / macOS / Linux）"""
+        import os
+        import platform
+
+        font_candidates = [
             ('SimHei', 'simhei.ttf'),
             ('SimHei', 'SimHei.ttf'),
             ('MicrosoftYaHei', 'msyh.ttc'),
             ('MicrosoftYaHei', 'msyh.ttf'),
             ('SimSun', 'simsun.ttc'),
         ]
-        for font_name, font_file in font_paths:
+
+        # 各平台字体搜索目录
+        system_font_dirs = []
+        sys_name = platform.system()
+        if sys_name == 'Windows':
+            system_font_dirs.append(r'C:\Windows\Fonts')
+        elif sys_name == 'Darwin':  # macOS
+            system_font_dirs.extend([
+                '/System/Library/Fonts',
+                '/System/Library/Fonts/Supplemental',
+                '/Library/Fonts',
+                os.path.expanduser('~/Library/Fonts'),
+            ])
+            # macOS 自带的中文字体
+            font_candidates.extend([
+                ('PingFang', '/System/Library/Fonts/PingFang.ttc'),
+                ('STHeiti', '/System/Library/Fonts/STHeiti Medium.ttc'),
+                ('STHeiti', '/System/Library/Fonts/STHeiti Light.ttc'),
+                ('Hiragino', '/System/Library/Fonts/Hiragino Sans GB.ttc'),
+                ('Hiragino', '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc'),
+                ('STSong', '/Library/Fonts/华文宋体.ttf'),
+                ('STFangsong', '/Library/Fonts/华文仿宋.ttf'),
+            ])
+        else:  # Linux
+            system_font_dirs.extend([
+                '/usr/share/fonts',
+                '/usr/share/fonts/truetype',
+                '/usr/share/fonts/opentype',
+                '/usr/local/share/fonts',
+                os.path.expanduser('~/.fonts'),
+                os.path.expanduser('~/.local/share/fonts'),
+            ])
+            font_candidates.extend([
+                ('WenQuanYi', 'wqy-microhei.ttc'),
+                ('WenQuanYi', 'wqy-zenhei.ttc'),
+                ('NotoSansCJK', 'NotoSansCJK-Regular.ttc'),
+                ('NotoSansSC', 'NotoSansSC-Regular.otf'),
+            ])
+
+        # 1) 尝试直接注册（绝对路径或 reportlab 能找到的）
+        for font_name, font_file in font_candidates:
             try:
                 pdfmetrics.registerFont(TTFont(font_name, font_file))
                 return font_name
             except Exception:
+                pass
+
+        # 2) 在系统字体目录中搜索
+        for font_dir in system_font_dirs:
+            if not os.path.isdir(font_dir):
                 continue
-        # 尝试系统字体路径
-        import os
-        win_font_dir = r'C:\Windows\Fonts'
-        for font_name, font_file in font_paths:
-            try:
-                full_path = os.path.join(win_font_dir, font_file)
-                pdfmetrics.registerFont(TTFont(font_name, full_path))
-                return font_name
-            except Exception:
+            for font_name, font_file in font_candidates:
+                if os.path.isabs(font_file):
+                    continue  # 绝对路径已在上面尝试过
+                full_path = os.path.join(font_dir, font_file)
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, full_path))
+                    return font_name
+                except Exception:
+                    pass
+
+        # 3) macOS / Linux 递归搜索常见中文字体
+        for font_dir in system_font_dirs:
+            if not os.path.isdir(font_dir):
                 continue
+            for root, dirs, files in os.walk(font_dir):
+                for f in files:
+                    fl = f.lower()
+                    if any(kw in fl for kw in ['pingfang', 'heiti', 'hei', 'songti', 'song',
+                                                'wqy', 'noto', 'hiragino', 'fangsong']):
+                        if fl.endswith(('.ttf', '.ttc', '.otf')):
+                            try:
+                                name = 'CJKFont'
+                                pdfmetrics.registerFont(TTFont(name, os.path.join(root, f)))
+                                return name
+                            except Exception:
+                                pass
+
         return 'Helvetica'
 
     def _create_styles(self) -> dict:

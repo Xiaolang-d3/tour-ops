@@ -65,10 +65,12 @@ class ChatRequest(BaseModel):
 
 # ======================== 千问AI核心调用 ========================
 
-async def call_qwen_api(messages: list, stream: bool = False) -> dict | httpx.Response:
+
+async def call_qwen_api(messages: list, stream: bool = False, timeout: float = 180.0) -> dict | httpx.Response:
     """
     调用通义千问API（DashScope OpenAI兼容接口）
     文档: https://help.aliyun.com/zh/model-studio/first-api-call-to-qwen
+    支持自动重试（非流式模式下最多重试2次）
     """
     api_key = settings.AI_API_KEY
     base_url = settings.AI_BASE_URL
@@ -92,9 +94,12 @@ async def call_qwen_api(messages: list, stream: bool = False) -> dict | httpx.Re
         "max_tokens": 4096,
     }
 
+    # 分别设置连接/读取/写入超时
+    timeouts = httpx.Timeout(timeout, connect=30.0)
+
     if stream:
         payload["stream"] = True
-        client = httpx.AsyncClient(timeout=120.0)
+        client = httpx.AsyncClient(timeout=timeouts)
         response = await client.send(
             client.build_request(
                 "POST",
@@ -110,49 +115,160 @@ async def call_qwen_api(messages: list, stream: bool = False) -> dict | httpx.Re
             raise HTTPException(status_code=502, detail=f"AI API 调用失败: {body.decode()}")
         return response, client
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
+    # 非流式：支持重试（指数退避，最多4次重试）
+    max_retries = 4
+    last_error = None
+    import asyncio
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeouts) as client:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
 
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"AI API 调用失败 (HTTP {response.status_code}): {response.text}"
-            )
+                if response.status_code != 200:
+                    # 5xx 服务端错误也走重试
+                    if response.status_code >= 500 and attempt < max_retries:
+                        print(f"[AI call_qwen_api] 第{attempt + 1}次请求收到 HTTP {response.status_code}，正在重试...")
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"AI API 调用失败 (HTTP {response.status_code}): {response.text}"
+                    )
 
-        return response.json()
+                return response.json()
+        except HTTPException:
+            raise
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ReadError, httpx.WriteError, ConnectionError, OSError) as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = 2 ** attempt  # 1s, 2s, 4s, 8s
+                print(f"[AI call_qwen_api] 第{attempt + 1}次请求失败({type(e).__name__}: {e})，{delay}秒后重试...")
+                await asyncio.sleep(delay)
+            else:
+                print(f"[AI call_qwen_api] 重试{max_retries}次后仍失败: {type(e).__name__}: {e}")
+                raise
+
+    raise last_error
+
+
 
 
 def extract_json_from_content(content: str) -> dict | None:
-    """从AI响应内容中提取JSON"""
+    """从AI响应内容中提取JSON，增强容错"""
+    import re
+
+    if not content or not content.strip():
+        return None
+
+    text = content.strip()
+
+    # 去除可能的 BOM 和不可见字符
+    text = text.lstrip('\ufeff\u200b')
+
     # 先尝试直接解析
     try:
-        return json.loads(content)
+        return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         pass
 
     # 尝试提取 ```json ... ``` 代码块
-    import re
-    json_block = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', content, re.DOTALL)
+    json_block = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
     if json_block:
         try:
             return json.loads(json_block.group(1).strip())
         except json.JSONDecodeError:
             pass
 
-    # 尝试提取 { ... } 块
-    start = content.find("{")
-    end = content.rfind("}") + 1
-    if start >= 0 and end > start:
-        try:
-            return json.loads(content[start:end])
-        except json.JSONDecodeError:
-            pass
+    # 尝试提取最外层 { ... } 块（处理嵌套大括号）
+    start = text.find("{")
+    if start >= 0:
+        depth = 0
+        end = -1
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end > start:
+            json_str = text[start:end]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # 尝试修复常见问题：尾部多余逗号
+                fixed = re.sub(r',\s*([}\]])', r'\1', json_str)
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
 
     return None
+
+
+
+# ======================== 数据清洗工具 ========================
+
+import re as _re
+
+def _normalize_time(t: str) -> str:
+    """将各种时间格式统一为 HH:MM"""
+    if not t:
+        return "09:00"
+    t = t.strip()
+    # 已经是 HH:MM
+    m = _re.match(r'^(\d{1,2}):(\d{2})', t)
+    if m:
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+    # 纯数字当小时
+    m = _re.match(r'^(\d{1,2})$', t)
+    if m:
+        return f"{int(m.group(1)):02d}:00"
+    # 中文格式如 "上午9:00" "下午2:30"
+    m = _re.search(r'(\d{1,2}):?(\d{2})?', t)
+    if m:
+        h = int(m.group(1))
+        mi = m.group(2) or "00"
+        if '下午' in t or '晚' in t:
+            if h < 12:
+                h += 12
+        return f"{h:02d}:{mi}"
+    return "09:00"
+
+def _normalize_type(t: str) -> str:
+    """将活动类型统一为 transport/attraction/meal/hotel/free"""
+    if not t:
+        return "free"
+    t = t.strip().lower()
+    valid = {"transport", "attraction", "meal", "hotel", "free"}
+    if t in valid:
+        return t
+    # 中文/别名映射
+    mapping = {
+        "交通": "transport", "出行": "transport", "飞机": "transport", "火车": "transport",
+        "景点": "attraction", "游览": "attraction", "参观": "attraction", "观光": "attraction", "sightseeing": "attraction",
+        "餐饮": "meal", "用餐": "meal", "早餐": "meal", "午餐": "meal", "晚餐": "meal", "dining": "meal", "food": "meal", "breakfast": "meal", "lunch": "meal", "dinner": "meal",
+        "住宿": "hotel", "酒店": "hotel", "入住": "hotel", "accommodation": "hotel", "lodging": "hotel",
+        "自由": "free", "休息": "free", "休闲": "free", "leisure": "free", "rest": "free", "shopping": "free", "购物": "free",
+    }
+    for k, v in mapping.items():
+        if k in t:
+            return v
+    return "free"
+
+def _safe_int(v) -> int:
+    """安全转换为整数"""
+    if v is None:
+        return 0
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        return 0
 
 
 # ======================== API 接口 ========================
@@ -167,27 +283,117 @@ async def generate_trip(demand: TripDemand, current_user: User = Depends(get_cur
     ]
 
     try:
-        result = await call_qwen_api(messages)
+        result = await call_qwen_api(messages, timeout=180.0)
         content = result["choices"][0]["message"]["content"]
         data = extract_json_from_content(content)
 
         if data:
-            days = (demand.end_date - demand.start_date).days + 1
-            # 确保字段存在
-            data.setdefault("title", f"{days}天行程方案")
-            data.setdefault("summary", "AI生成的行程建议")
-            data.setdefault("total_days", days)
-            data.setdefault("estimated_budget", (demand.budget_min + demand.budget_max) // 2)
-            data.setdefault("activities", [])
-            data.setdefault("tips", [])
-            return TripSuggestion(**data)
+            cleaned = _clean_trip_data(data, demand)
+            return TripSuggestion(**cleaned)
+        else:
+            print(f"[AI generate_trip] AI返回内容无法解析为JSON: {content[:300]}")
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[AI generate_trip] 解析失败: {e}")
+        print(f"[AI generate_trip] 调用失败: {type(e).__name__}: {e}")
 
-    # 解析失败时返回兜底方案
     return generate_fallback(demand)
+
+
+def _clean_trip_data(data: dict, demand: TripDemand) -> dict:
+    """清洗AI返回的行程数据"""
+    days = (demand.end_date - demand.start_date).days + 1
+    data.setdefault("title", f"{days}天行程方案")
+    data.setdefault("summary", "AI生成的行程建议")
+    data.setdefault("total_days", days)
+    data.setdefault("estimated_budget", (demand.budget_min + demand.budget_max) // 2)
+    data.setdefault("tips", [])
+
+    raw_acts = data.get("activities") or data.get("itinerary") or data.get("schedule") or []
+    cleaned = []
+    for act in raw_acts:
+        if not isinstance(act, dict):
+            continue
+        cleaned.append({
+            "day": act.get("day", 1),
+            "time": _normalize_time(act.get("time") or act.get("start_time") or "09:00"),
+            "type": _normalize_type(act.get("type") or act.get("activity_type") or act.get("category") or "free"),
+            "name": act.get("name") or act.get("activity_name") or act.get("title") or "未命名活动",
+            "duration": str(act.get("duration") or "1小时"),
+            "location": act.get("location") or act.get("place") or act.get("venue") or None,
+            "estimated_cost": _safe_int(act.get("estimated_cost") or act.get("cost") or act.get("price") or 0),
+            "notes": act.get("notes") or act.get("description") or act.get("remark") or None,
+        })
+    data["activities"] = cleaned
+    return data
+
+
+@router.post("/generate/stream")
+async def generate_trip_stream(demand: TripDemand, current_user: User = Depends(get_current_user)):
+    """流式生成行程 — 用 SSE 逐步返回内容，避免长时间等待被断连"""
+    prompt = build_trip_prompt(demand)
+    messages = [
+        {"role": "system", "content": TRIP_PLANNER_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt}
+    ]
+
+    try:
+        response, client = await call_qwen_api(messages, stream=True, timeout=180.0)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AI generate_trip_stream] 流式连接失败: {type(e).__name__}: {e}")
+        # 返回 fallback
+        fallback = generate_fallback(demand)
+        async def fallback_gen():
+            yield f"data: {json.dumps({'type': 'result', 'data': fallback.model_dump()}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(fallback_gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    async def event_generator():
+        full_content = []
+        try:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_str)
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            full_content.append(content)
+                            # 把每个 chunk 转发给前端，让前端知道还在工作
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content}, ensure_ascii=False)}\n\n"
+                    except json.JSONDecodeError:
+                        continue
+
+            # 流结束，解析完整内容
+            text = "".join(full_content)
+            parsed = extract_json_from_content(text)
+            if parsed:
+                cleaned = _clean_trip_data(parsed, demand)
+                yield f"data: {json.dumps({'type': 'result', 'data': cleaned}, ensure_ascii=False)}\n\n"
+            else:
+                print(f"[AI generate_trip_stream] 流式内容无法解析JSON: {text[:300]}")
+                fallback = generate_fallback(demand)
+                yield f"data: {json.dumps({'type': 'result', 'data': fallback.model_dump()}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            print(f"[AI generate_trip_stream] 流式读取异常: {type(e).__name__}: {e}")
+            fallback = generate_fallback(demand)
+            yield f"data: {json.dumps({'type': 'result', 'data': fallback.model_dump()}, ensure_ascii=False)}\n\n"
+        finally:
+            await response.aclose()
+            await client.aclose()
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/chat")
@@ -288,8 +494,12 @@ def clear_chat_history(
 
 
 @router.post("/chat/stream")
-async def ai_chat_stream(request: ChatRequest, current_user: User = Depends(get_current_user)):
-    """AI智能对话 - 流式响应（SSE）"""
+async def ai_chat_stream(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """AI智能对话 - 流式响应（SSE），自动保存对话记录"""
     messages = [
         {"role": "system", "content": TRAVEL_ASSISTANT_SYSTEM_PROMPT}
     ]
@@ -302,12 +512,20 @@ async def ai_chat_stream(request: ChatRequest, current_user: User = Depends(get_
 
     messages.append({"role": "user", "content": request.message})
 
+    # 保存用户消息
+    user_msg = ChatHistory(user_id=current_user.id, role="user", content=request.message)
+    db.add(user_msg)
+    db.commit()
+
     try:
         response, client = await call_qwen_api(messages, stream=True)
     except HTTPException:
         raise
 
+    user_id = current_user.id
+
     async def event_generator():
+        full_content = []
         try:
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -320,12 +538,25 @@ async def ai_chat_stream(request: ChatRequest, current_user: User = Depends(get_
                         delta = data.get("choices", [{}])[0].get("delta", {})
                         content = delta.get("content", "")
                         if content:
+                            full_content.append(content)
                             yield f"data: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
                     except json.JSONDecodeError:
                         continue
         finally:
             await response.aclose()
             await client.aclose()
+            # 保存 AI 回复到数据库
+            if full_content:
+                from TourOps.core.database import SessionLocal
+                save_db = SessionLocal()
+                try:
+                    ai_msg = ChatHistory(user_id=user_id, role="assistant", content="".join(full_content))
+                    save_db.add(ai_msg)
+                    save_db.commit()
+                except Exception:
+                    save_db.rollback()
+                finally:
+                    save_db.close()
 
     return StreamingResponse(
         event_generator(),
@@ -335,6 +566,101 @@ async def ai_chat_stream(request: ChatRequest, current_user: User = Depends(get_
             "X-Accel-Buffering": "no",
         }
     )
+
+class SaveTripFromAI(BaseModel):
+    """将AI生成的行程保存为真实行程"""
+    title: str
+    start_date: date
+    end_date: date
+    participants: int = 1
+    budget: int | None = None
+    activities: List[ActivitySuggestion]
+
+
+@router.post("/save-trip")
+async def save_trip_from_ai(
+    data: SaveTripFromAI,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """将AI生成的行程建议保存为真实行程（含活动）"""
+    from TourOps.models.trip import Trip, TripStatus
+    from TourOps.models.activity import Activity, ActivityType
+    from datetime import datetime, timedelta
+    import secrets
+
+    # 创建行程
+    trip = Trip(
+        name=data.title,
+        start_date=data.start_date,
+        end_date=data.end_date,
+        guest_count=data.participants,
+        budget=data.budget,
+        status=TripStatus.DRAFT,
+        share_code=secrets.token_hex(16),
+        created_by=current_user.id,
+    )
+    db.add(trip)
+    db.flush()
+
+    # 类型映射
+    type_map = {
+        "transport": ActivityType.TRANSPORT,
+        "attraction": ActivityType.ATTRACTION,
+        "meal": ActivityType.MEAL,
+        "hotel": ActivityType.HOTEL,
+        "free": ActivityType.FREE,
+    }
+
+    # 解析时长字符串为分钟
+    def parse_duration_minutes(dur: str) -> int:
+        import re
+        total = 0
+        h = re.search(r'(\d+)\s*[小时hH]', dur)
+        m = re.search(r'(\d+)\s*[分钟mM]', dur)
+        if h:
+            total += int(h.group(1)) * 60
+        if m:
+            total += int(m.group(1))
+        if total == 0:
+            # 尝试纯数字（当作小时）
+            nums = re.findall(r'[\d.]+', dur)
+            if nums:
+                total = int(float(nums[0]) * 60)
+        return total or 60  # 默认1小时
+
+    for idx, act in enumerate(data.activities):
+        # 计算活动日期
+        act_date = data.start_date + timedelta(days=act.day - 1)
+        # 解析时间 HH:MM
+        try:
+            parts = act.time.split(":")
+            hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            hour, minute = 9, 0
+
+        start_dt = datetime(act_date.year, act_date.month, act_date.day, hour, minute)
+        duration_min = parse_duration_minutes(act.duration)
+        end_dt = start_dt + timedelta(minutes=duration_min)
+
+        activity = Activity(
+            trip_id=trip.id,
+            type=type_map.get(act.type, ActivityType.FREE),
+            name=act.name,
+            start_time=start_dt,
+            end_time=end_dt,
+            location=act.location,
+            cost=act.estimated_cost,
+            notes=act.notes,
+            sort_order=idx,
+        )
+        db.add(activity)
+
+    db.commit()
+    db.refresh(trip)
+    return {"message": "行程已保存", "trip_id": trip.id}
+
+
 
 
 # ======================== 提示词模板 ========================
@@ -376,7 +702,13 @@ TRAVEL_ASSISTANT_SYSTEM_PROMPT = """你是TourOps旅行编排系统的AI助手�
 5. 旅行注意事项和安全提示
 
 请用友好、专业的语气回复。回复要简洁实用，避免过长的文字。
-如果用户的问题与旅行无关，礼貌地引导话题回到旅行相关内容。"""
+如果用户的问题与旅行无关，礼貌地引导话题回到旅行相关内容。
+
+重要规则：当你为用户推荐或规划了具体的多天行程安排（包含每天的活动）时，请在回复文本的最末尾附加一段隐藏的JSON数据，格式如下：
+<!--TRIP_JSON:{"title":"行程标题","total_days":天数,"estimated_budget":人均预算整数,"activities":[{"day":1,"time":"09:00","type":"attraction","name":"活动名称","duration":"2小时","location":"地点","estimated_cost":100,"notes":"备注"}]}-->
+
+其中type只能是：transport/attraction/meal/hotel/free 五选一。
+只有当你的回复包含具体的、可执行的多天行程安排时才附加这段JSON。普通的问答、单个景点推荐、旅行建议等不需要附加。"""
 
 
 def build_trip_prompt(demand: TripDemand) -> str:

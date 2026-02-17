@@ -37,6 +37,8 @@ def export_trip_pdf(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)}")
 
 
 @router.get("/{trip_id}/export/excel")
@@ -57,3 +59,5 @@ def export_trip_excel(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Excel 生成失败: {str(e)}")

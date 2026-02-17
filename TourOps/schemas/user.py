@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from datetime import datetime
 from TourOps.models.user import UserRole
 
 class UserCreate(BaseModel):
@@ -18,6 +19,7 @@ class UserResponse(BaseModel):
     name: str | None
     role: UserRole
     avatar: str | None = None
+    created_at: datetime | None = None
     
     class Config:
         from_attributes = True

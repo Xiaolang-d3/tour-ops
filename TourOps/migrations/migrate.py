@@ -15,8 +15,30 @@ def get_alembic_config():
     alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
     return alembic_cfg
 
+def ensure_database():
+    """确保数据库存在，不存在则自动创建"""
+    from TourOps.core.config import settings
+    import pymysql
+    conn = pymysql.connect(
+        host=settings.DB_HOST,
+        port=settings.DB_PORT,
+        user=settings.DB_USER,
+        password=settings.DB_PASSWORD,
+    )
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"CREATE DATABASE IF NOT EXISTS `{settings.DB_NAME}` "
+                f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+            )
+        conn.commit()
+        print(f"数据库 '{settings.DB_NAME}' 已就绪")
+    finally:
+        conn.close()
+
 def upgrade(revision: str = "head"):
     """升级到指定版本"""
+    ensure_database()
     alembic_cfg = get_alembic_config()
     command.upgrade(alembic_cfg, revision)
     
