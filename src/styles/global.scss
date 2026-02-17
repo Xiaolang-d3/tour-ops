@@ -1,0 +1,199 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  color: #303133;
+  background: #f5f6fa;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --el-color-primary: #8b5cf6;
+  --el-color-primary-light-3: #a78bfa;
+  --el-color-primary-light-5: #c4b5fd;
+  --el-color-primary-light-7: #ddd6fe;
+  --el-color-primary-light-8: #ede9fe;
+  --el-color-primary-light-9: #f5f3ff;
+  --el-color-primary-dark-2: #7c3aed;
+}
+
+// 滚动条美化
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d0d3d9;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a8abb2;
+}
+
+// Element Plus 卡片统一
+.el-card {
+  border-radius: 16px !important;
+  border: 1px solid rgba(0, 0, 0, 0.05) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+  transition: box-shadow 0.3s ease, transform 0.3s ease !important;
+  overflow: hidden;
+}
+
+// 对话框圆角
+.el-dialog {
+  border-radius: 20px !important;
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04) !important;
+}
+.el-dialog__header {
+  border-bottom: 1px solid #f0f0f0;
+  padding: 20px 24px 16px !important;
+}
+.el-dialog__body {
+  padding: 24px !important;
+}
+.el-dialog__footer {
+  border-top: 1px solid #f0f0f0;
+  padding: 16px 24px 20px !important;
+}
+.el-dialog__title {
+  font-weight: 600;
+  font-size: 16px;
+  color: #1a1a2e;
+}
+
+// 表格优化
+.el-table {
+  border-radius: 12px !important;
+  overflow: hidden;
+  --el-table-border-color: #f0f2f5;
+  --el-table-row-hover-bg-color: #f8fafc;
+}
+.el-table th.el-table__cell {
+  background: #fafbfc !important;
+  font-weight: 600;
+  color: #606266;
+  font-size: 13px;
+}
+
+// 按钮优化
+.el-button {
+  font-weight: 500;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 10px;
+}
+.el-button--primary {
+  --el-button-bg-color: #8b5cf6;
+  --el-button-border-color: #8b5cf6;
+  --el-button-hover-bg-color: #a78bfa;
+  --el-button-hover-border-color: #a78bfa;
+  --el-button-active-bg-color: #7c3aed;
+  --el-button-active-border-color: #7c3aed;
+  --el-button-disabled-bg-color: #c4b5fd;
+  --el-button-disabled-border-color: #c4b5fd;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1) !important;
+  border: none !important;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2);
+}
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: linear-gradient(135deg, #a78bfa, #818cf8) !important;
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
+}
+.el-button--primary:active {
+  background: linear-gradient(135deg, #7c3aed, #4f46e5) !important;
+}
+.el-button--primary.is-plain {
+  --el-button-bg-color: #f5f3ff;
+  --el-button-border-color: #ddd6fe;
+  --el-button-text-color: #7c3aed;
+  --el-button-hover-bg-color: #ede9fe;
+  --el-button-hover-border-color: #c4b5fd;
+  --el-button-hover-text-color: #8b5cf6;
+  background: none !important;
+  box-shadow: none;
+}
+.el-button.is-round {
+  border-radius: 12px;
+}
+
+// Tag 优化
+.el-tag {
+  border-radius: 8px !important;
+  font-weight: 500;
+}
+
+// 选中态优化
+::selection {
+  background: rgba(139, 92, 246, 0.15);
+}
+
+// 输入框聚焦优化
+.el-input__wrapper:focus-within {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset, 0 0 0 3px rgba(139, 92, 246, 0.1) !important;
+}
+
+// Message 优化
+.el-message {
+  border-radius: 12px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1) !important;
+  border: none !important;
+}
+
+// Tabs 统一风格
+.el-tabs__active-bar {
+  border-radius: 1px;
+}
+
+// 全局过渡
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+// ===== 全局响应式 =====
+@media (max-width: 768px) {
+  .el-dialog {
+    width: 92vw !important;
+    margin: 8vh auto !important;
+    border-radius: 16px !important;
+  }
+  .el-dialog__header {
+    padding: 16px 20px 12px !important;
+  }
+  .el-dialog__body {
+    padding: 16px 20px !important;
+  }
+  .el-dialog__footer {
+    padding: 12px 20px 16px !important;
+  }
+  .el-table {
+    font-size: 13px;
+  }
+  .el-message {
+    min-width: auto !important;
+    max-width: 90vw !important;
+  }
+}
+
+/* 模板详情抽屉 */
+.tpl-detail-drawer .el-drawer__body {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tpl-detail-drawer .detail-timeline {
+  flex: 1;
+  overflow-y: auto;
+}
