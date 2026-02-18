@@ -110,7 +110,7 @@ async function handleLogin() {
     if (userStore.isAdmin) {
       router.push('/admin')
     } else {
-      router.push('/trips')
+      router.push('/dashboard')
     }
   } finally { loading.value = false }
 }

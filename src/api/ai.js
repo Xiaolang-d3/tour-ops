@@ -19,6 +19,10 @@ export const clearChatHistory = () => request.delete('/ai/chat/history')
 
 export const saveTripFromAI = (data) => request.post('/ai/save-trip', data)
 
+export const recommendActivities = (data) => request.post('/ai/recommend-activities', data, { timeout: 120000 })
+
+export const chatGenerateTrip = (data) => request.post('/ai/chat/generate-trip', data, { timeout: 120000 })
+
 // SSE 流式对话
 export const aiChatStream = (data, token) => {
   return fetch('/api/v1/ai/chat/stream', {

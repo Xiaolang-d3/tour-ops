@@ -8,8 +8,8 @@
           <span>返回列表</span>
         </div>
         <div class="hero-actions">
-          <el-dropdown @command="handleExport">
-            <el-button round>
+          <el-dropdown @command="handleExport" :disabled="!canShareExport">
+            <el-button round :disabled="!canShareExport">
               <el-icon><Download /></el-icon> 导出
             </el-button>
             <template #dropdown>
@@ -19,7 +19,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button round @click="showShare = true">
+          <el-button round :disabled="!canShareExport" @click="openShareDialog">
             <el-icon><Share /></el-icon> 分享
           </el-button>
           <el-dropdown @command="handleStatus" trigger="click">
@@ -105,6 +105,9 @@
         </h3>
         <div class="toolbar-right">
           <el-switch v-model="continuousMode" active-text="连续添加" size="small" />
+          <el-button round @click="handleRecommend" :loading="recommending">
+            ✨ AI 推荐
+          </el-button>
           <el-button type="primary" round @click="openActivityDialog()">
             <el-icon><Plus /></el-icon> 添加活动
           </el-button>
@@ -156,6 +159,12 @@
                   </span>
                 </div>
                 <div v-if="act.notes" class="act-notes">{{ act.notes }}</div>
+                <div class="act-resources" v-if="act.guide_id || act.vehicle_id || act.hotel_id || act.restaurant_id">
+                  <span v-if="act.guide_id" class="act-resource-tag guide">👤 {{ getResourceName('guide', act.guide_id) }}</span>
+                  <span v-if="act.vehicle_id" class="act-resource-tag vehicle">🚌 {{ getResourceName('vehicle', act.vehicle_id) }}</span>
+                  <span v-if="act.hotel_id" class="act-resource-tag hotel">🏨 {{ getResourceName('hotel', act.hotel_id) }}</span>
+                  <span v-if="act.restaurant_id" class="act-resource-tag restaurant">🍽️ {{ getResourceName('restaurant', act.restaurant_id) }}</span>
+                </div>
               </div>
               <div class="act-actions" @click.stop>
                 <el-button text size="small" circle type="danger" @click="handleDeleteActivity(act.id)">
@@ -211,6 +220,27 @@
             <template #prefix>¥</template>
           </el-input>
         </el-form-item>
+        <!-- 资源关联 -->
+        <el-form-item label="导游">
+          <el-select v-model="actForm.guide_id" placeholder="选择导游（选填）" clearable filterable style="width:100%">
+            <el-option v-for="g in guides" :key="g.id" :label="`${g.name}${g.contact_phone ? ' · ' + g.contact_phone : ''}`" :value="g.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="actForm.type === 'transport'" label="车辆">
+          <el-select v-model="actForm.vehicle_id" placeholder="选择车辆（选填）" clearable filterable style="width:100%">
+            <el-option v-for="v in vehicles" :key="v.id" :label="`${v.name}${v.plate_number ? ' · ' + v.plate_number : ''}${v.seats ? ' · ' + v.seats + '座' : ''}`" :value="v.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="actForm.type === 'hotel'" label="酒店">
+          <el-select v-model="actForm.hotel_id" placeholder="选择酒店（选填）" clearable filterable style="width:100%">
+            <el-option v-for="h in hotels" :key="h.id" :label="`${h.name}${h.star_rating ? ' · ' + h.star_rating + '星' : ''}`" :value="h.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="actForm.type === 'meal'" label="餐厅">
+          <el-select v-model="actForm.restaurant_id" placeholder="选择餐厅（选填）" clearable filterable style="width:100%">
+            <el-option v-for="r in restaurants" :key="r.id" :label="`${r.name}${r.cuisine ? ' · ' + r.cuisine : ''}`" :value="r.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="actForm.notes" type="textarea" :rows="2" placeholder="选填" />
         </el-form-item>
@@ -232,9 +262,113 @@
             <el-button @click="copyShareUrl">复制</el-button>
           </template>
         </el-input>
-        <img :src="qrcodeUrl" alt="二维码" style="width:180px;margin-top:16px;border-radius:12px" />
+        <img v-if="qrcodeBlobUrl" :src="qrcodeBlobUrl" alt="二维码" style="width:180px;margin-top:16px;border-radius:12px" />
+        <div v-else style="margin-top:16px;color:#909399;font-size:13px">二维码加载中...</div>
       </div>
     </el-dialog>
+
+    <!-- AI 推荐活动对话框 -->
+    <el-dialog v-model="showRecommend" title="✨ AI 推荐活动" width="680px" :close-on-click-modal="false">
+      <div v-if="recommending" style="text-align:center;padding:40px 0">
+        <el-icon class="is-loading" size="32" color="#8b5cf6"><Loading /></el-icon>
+        <p style="margin-top:12px;color:#909399;font-size:14px">AI 正在分析行程并生成推荐...</p>
+      </div>
+      <div v-else-if="recommendList.length">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <span style="font-size:13px;color:#909399">共推荐 {{ recommendList.length }} 项活动，点击添加到行程</span>
+          <el-button size="small" type="primary" plain round @click="addAllRecommended" :disabled="recommendList.every(a => a.added)">
+            全部添加
+          </el-button>
+        </div>
+        <div class="recommend-list">
+          <div v-for="(act, idx) in recommendList" :key="idx" class="recommend-card" :class="{ added: act.added }">
+            <div class="rec-left">
+              <div class="rec-type-badge" :class="act.type">
+                {{ actTypeIcon(act.type) }}
+              </div>
+              <div class="rec-info">
+                <div class="rec-name">{{ act.name }}</div>
+                <div class="rec-meta">
+                  <span>第{{ act.day }}天</span>
+                  <span>{{ act.time }}</span>
+                  <span v-if="act.duration">{{ act.duration }}</span>
+                  <span v-if="act.location">📍 {{ act.location }}</span>
+                </div>
+                <div v-if="act.notes" class="rec-notes">{{ act.notes }}</div>
+              </div>
+            </div>
+            <div class="rec-right">
+              <span v-if="act.estimated_cost" class="rec-cost">¥{{ act.estimated_cost }}</span>
+              <el-button v-if="!act.added" size="small" type="primary" round :loading="addingIdx === idx" @click="addRecommendedActivity(act, idx)">
+                添加
+              </el-button>
+              <el-tag v-else type="success" size="small" round>已添加</el-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-else style="text-align:center;padding:30px 0;color:#909399">
+        暂无推荐结果
+      </div>
+      <template #footer>
+        <el-button @click="showRecommend = false">关闭</el-button>
+        <el-button type="primary" plain @click="handleRecommend" :loading="recommending">重新推荐</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 评价统计区域 -->
+    <div v-if="reviewStats && reviewStats.total > 0" class="review-stats-section">
+      <div class="section-toolbar">
+        <h3 class="section-title">
+          <span class="title-icon">📊</span> 客户评价
+          <span class="act-count">{{ reviewStats.total }}条</span>
+        </h3>
+      </div>
+
+      <div class="review-overview">
+        <div class="review-score-card">
+          <div class="score-big">{{ reviewStats.avg_rating }}</div>
+          <div class="score-stars">
+            <span v-for="s in 5" :key="s" class="star-icon" :class="{ active: s <= Math.round(reviewStats.avg_rating) }">★</span>
+          </div>
+          <div class="score-total">{{ reviewStats.total }} 条评价</div>
+        </div>
+
+        <div class="review-dist">
+          <div v-for="i in [5,4,3,2,1]" :key="i" class="dist-row">
+            <span class="dist-label">{{ i }}星</span>
+            <div class="dist-bar">
+              <div class="dist-fill" :style="{ width: (reviewStats.rating_dist[String(i)] || 0) / reviewStats.total * 100 + '%' }"></div>
+            </div>
+            <span class="dist-count">{{ reviewStats.rating_dist[String(i)] || 0 }}</span>
+          </div>
+        </div>
+
+        <div class="review-tags-cloud" v-if="Object.keys(reviewStats.tag_stats || {}).length">
+          <div class="tags-title">热门标签</div>
+          <div class="tags-wrap">
+            <span v-for="(count, tag) in reviewStats.tag_stats" :key="tag" class="cloud-tag">
+              {{ tag }} <span class="tag-num">{{ count }}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最近评价 -->
+      <div v-if="reviewList.length" class="recent-reviews">
+        <div v-for="r in reviewList.slice(0, 5)" :key="r.id" class="review-item">
+          <div class="review-item-top">
+            <span class="reviewer-name">{{ r.reviewer_name }}</span>
+            <span class="review-stars-sm">{{ '★'.repeat(r.rating) }}{{ '☆'.repeat(5 - r.rating) }}</span>
+            <span class="review-date">{{ r.created_at ? r.created_at.slice(0, 10) : '' }}</span>
+          </div>
+          <div class="review-item-tags" v-if="r.tags?.length">
+            <span v-for="t in r.tags" :key="t" class="review-tag-sm">{{ t }}</span>
+          </div>
+          <p v-if="r.comment" class="review-comment-sm">{{ r.comment }}</p>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div v-else style="padding:40px 0">
@@ -251,6 +385,9 @@ import {
   getTrip, updateTrip, getActivities, createActivity, updateActivity,
   deleteActivity, exportPdf, exportExcel, getShareInfo, getQrcodeUrl
 } from '@/api/trips'
+import { getTripReviews, getTripReviewStats } from '@/api/reviews'
+import { getGuides, getVehicles, getHotels, getRestaurants } from '@/api/resources'
+import { recommendActivities } from '@/api/ai'
 
 const route = useRoute()
 const router = useRouter()
@@ -267,9 +404,15 @@ const shareInfo = ref(null)
 const actFormRef = ref(null)
 const continuousMode = ref(false)
 
+const guides = ref([])
+const vehicles = ref([])
+const hotels = ref([])
+const restaurants = ref([])
+
 const actForm = reactive({
   type: 'attraction', name: '', date: null, startHour: null, endHour: null,
-  location: '', cost: null, notes: ''
+  location: '', cost: null, notes: '',
+  guide_id: null, vehicle_id: null, hotel_id: null, restaurant_id: null
 })
 
 const actRules = {
@@ -297,6 +440,11 @@ const statusOptions = [
   { value: 'cancelled', label: '已取消', color: '#ef4444' },
 ]
 const actTypeIcon = (t) => ({ transport: '🚌', attraction: '🏛️', meal: '🍽️', hotel: '🏨', free: '🎯' }[t] || '📌')
+
+const canShareExport = computed(() => {
+  const s = trip.value?.status
+  return s === 'confirmed' || s === 'completed'
+})
 const formatHour = (t) => t ? dayjs(t).format('HH:mm') : ''
 
 const totalDays = computed(() => {
@@ -307,6 +455,14 @@ const totalDays = computed(() => {
 const totalCost = computed(() => activities.value.reduce((sum, a) => sum + Number(a.cost || 0), 0))
 const budgetPercent = computed(() => trip.value?.budget ? Math.round(totalCost.value / Number(trip.value.budget) * 100) : 0)
 const getDayCost = (dayActs) => dayActs.reduce((sum, a) => sum + Number(a.cost || 0), 0)
+
+const getResourceName = (type, id) => {
+  if (!id) return ''
+  const map = { guide: guides, vehicle: vehicles, hotel: hotels, restaurant: restaurants }
+  const list = map[type]?.value || []
+  const item = list.find(r => r.id === id)
+  return item?.name || ''
+}
 
 const groupedActivities = computed(() => {
   const groups = {}
@@ -322,7 +478,94 @@ const groupedActivities = computed(() => {
 })
 
 const shareUrl = computed(() => shareInfo.value ? `${window.location.origin}/share/${shareInfo.value.share_code}` : '')
-const qrcodeUrl = computed(() => getQrcodeUrl(tripId.value))
+const qrcodeBlobUrl = ref(null)
+
+async function loadQrcode() {
+  try {
+    const url = getQrcodeUrl(tripId.value)
+    const token = localStorage.getItem('token')
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) return
+    const blob = await res.blob()
+    qrcodeBlobUrl.value = URL.createObjectURL(blob)
+  } catch {}
+}
+
+const reviewStats = ref(null)
+const reviewList = ref([])
+
+async function loadReviews() {
+  try {
+    const [stats, list] = await Promise.all([
+      getTripReviewStats(tripId.value),
+      getTripReviews(tripId.value),
+    ])
+    reviewStats.value = stats
+    reviewList.value = list
+  } catch {}
+}
+
+// AI 推荐活动
+const showRecommend = ref(false)
+const recommending = ref(false)
+const recommendList = ref([])
+const addingIdx = ref(-1)
+
+async function handleRecommend() {
+  showRecommend.value = true
+  recommending.value = true
+  recommendList.value = []
+  try {
+    const res = await recommendActivities({ trip_id: tripId.value })
+    recommendList.value = (res.activities || []).map(a => ({ ...a, added: false }))
+    if (!recommendList.value.length) {
+      ElMessage.info(res.message || 'AI 暂无推荐，请稍后重试')
+    }
+  } catch (e) {
+    ElMessage.error('AI 推荐失败，请检查网络或稍后重试')
+  } finally { recommending.value = false }
+}
+
+async function addRecommendedActivity(act, idx) {
+  if (!trip.value || act.added) return
+  addingIdx.value = idx
+  try {
+    const actDate = dayjs(trip.value.start_date).add(act.day - 1, 'day').format('YYYY-MM-DD')
+    const sh = act.time || '09:00'
+    // 解析 duration 为分钟
+    let mins = 60
+    const hm = act.duration?.match(/(\d+)\s*[小时hH]/)
+    const mm = act.duration?.match(/(\d+)\s*[分钟mM]/)
+    if (hm) mins = parseInt(hm[1]) * 60
+    if (mm) mins += parseInt(mm[1])
+    const endTime = dayjs(`${actDate}T${sh}`).add(mins, 'minute').format('HH:mm')
+
+    await createActivity(tripId.value, {
+      type: act.type, name: act.name,
+      start_time: `${actDate}T${sh}:00`,
+      end_time: `${actDate}T${endTime}:00`,
+      location: act.location || null,
+      cost: act.estimated_cost || null,
+      notes: act.notes || null,
+    })
+    act.added = true
+    ElMessage.success(`已添加「${act.name}」`)
+    activities.value = await getActivities(tripId.value)
+  } catch (e) {
+    ElMessage.error('添加失败')
+  } finally { addingIdx.value = -1 }
+}
+
+async function addAllRecommended() {
+  const toAdd = recommendList.value.filter(a => !a.added)
+  if (!toAdd.length) return
+  for (let i = 0; i < toAdd.length; i++) {
+    const act = toAdd[i]
+    const idx = recommendList.value.indexOf(act)
+    await addRecommendedActivity(act, idx)
+  }
+  ElMessage.success('全部添加完成')
+}
 
 function disableDate(date) {
   if (!trip.value) return false
@@ -351,6 +594,16 @@ async function loadData() {
   } finally { loading.value = false }
 }
 
+async function loadResources() {
+  try {
+    const [g, v, h, r] = await Promise.all([getGuides(), getVehicles(), getHotels(), getRestaurants()])
+    guides.value = g
+    vehicles.value = v
+    hotels.value = h
+    restaurants.value = r
+  } catch {}
+}
+
 function openActivityDialog(act = null) {
   editingActivity.value = act
   if (act) {
@@ -358,13 +611,16 @@ function openActivityDialog(act = null) {
       type: act.type, name: act.name,
       date: dayjs(act.start_time).format('YYYY-MM-DD'),
       startHour: new Date(act.start_time), endHour: new Date(act.end_time),
-      location: act.location || '', cost: act.cost, notes: act.notes || ''
+      location: act.location || '', cost: act.cost, notes: act.notes || '',
+      guide_id: act.guide_id || null, vehicle_id: act.vehicle_id || null,
+      hotel_id: act.hotel_id || null, restaurant_id: act.restaurant_id || null
     })
   } else {
     Object.assign(actForm, {
       type: 'attraction', name: '', date: trip.value?.start_date || null,
       startHour: new Date('2000-01-01T09:00'), endHour: new Date('2000-01-01T12:00'),
-      location: '', cost: null, notes: ''
+      location: '', cost: null, notes: '',
+      guide_id: null, vehicle_id: null, hotel_id: null, restaurant_id: null
     })
   }
   showActivity.value = true
@@ -377,7 +633,8 @@ function openActivityForDay(dayLabel) {
   Object.assign(actForm, {
     type: 'attraction', name: '', date,
     startHour: new Date('2000-01-01T09:00'), endHour: new Date('2000-01-01T12:00'),
-    location: '', cost: null, notes: ''
+    location: '', cost: null, notes: '',
+    guide_id: null, vehicle_id: null, hotel_id: null, restaurant_id: null
   })
   showActivity.value = true
 }
@@ -394,7 +651,9 @@ async function handleSaveActivity() {
     const data = {
       type: actForm.type, name: actForm.name,
       start_time: `${date}T${sh}:00`, end_time: `${date}T${eh}:00`,
-      location: actForm.location || null, cost: actForm.cost || null, notes: actForm.notes || null
+      location: actForm.location || null, cost: actForm.cost || null, notes: actForm.notes || null,
+      guide_id: actForm.guide_id || null, vehicle_id: actForm.vehicle_id || null,
+      hotel_id: actForm.hotel_id || null, restaurant_id: actForm.restaurant_id || null
     }
     if (editingActivity.value) {
       await updateActivity(tripId.value, editingActivity.value.id, data)
@@ -408,7 +667,8 @@ async function handleSaveActivity() {
         Object.assign(actForm, {
           type: keepType, name: '', date: keepDate,
           startHour: actForm.endHour, endHour: null,
-          location: '', cost: null, notes: ''
+          location: '', cost: null, notes: '',
+          guide_id: null, vehicle_id: null, hotel_id: null, restaurant_id: null
         })
         actFormRef.value?.clearValidate()
       } else { showActivity.value = false }
@@ -476,6 +736,13 @@ async function handleExport(type) {
   }
 }
 
+async function openShareDialog() {
+  showShare.value = true
+  if (!qrcodeBlobUrl.value) {
+    await loadQrcode()
+  }
+}
+
 async function copyShareUrl() {
   await navigator.clipboard.writeText(shareUrl.value)
   ElMessage.success('已复制')
@@ -483,7 +750,9 @@ async function copyShareUrl() {
 
 onMounted(async () => {
   await loadData()
+  loadResources()
   shareInfo.value = await getShareInfo(tripId.value)
+  loadReviews()
 })
 </script>
 
@@ -808,6 +1077,25 @@ onMounted(async () => {
   margin-top: 4px;
   line-height: 1.5;
 }
+.act-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.act-resource-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.act-resource-tag.guide { background: #ecfdf5; color: #059669; }
+.act-resource-tag.vehicle { background: #fff7ed; color: #c2410c; }
+.act-resource-tag.hotel { background: #ede9fe; color: #7c3aed; }
+.act-resource-tag.restaurant { background: #fef2f2; color: #dc2626; }
 .act-actions {
   flex-shrink: 0;
   opacity: 0;
@@ -824,6 +1112,122 @@ onMounted(async () => {
 .empty-title { font-size: 16px; font-weight: 600; color: #303133; margin-bottom: 6px; }
 .empty-desc { font-size: 13px; color: #909399; margin-bottom: 20px; }
 
+/* ===== AI 推荐列表 ===== */
+.recommend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 450px;
+  overflow-y: auto;
+}
+.recommend-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  background: #fafbfd;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+.recommend-card:hover { background: #f5f3ff; border-color: rgba(139,92,246,0.12); }
+.recommend-card.added { opacity: 0.55; }
+.rec-left { display: flex; align-items: flex-start; gap: 12px; flex: 1; min-width: 0; }
+.rec-type-badge {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+}
+.rec-type-badge.transport { background: #fff7ed; }
+.rec-type-badge.attraction { background: #ecfdf5; }
+.rec-type-badge.meal { background: #fef2f2; }
+.rec-type-badge.hotel { background: #ede9fe; }
+.rec-type-badge.free { background: #eff6ff; }
+.rec-info { flex: 1; min-width: 0; }
+.rec-name { font-size: 14px; font-weight: 600; color: #1a1a2e; margin-bottom: 4px; }
+.rec-meta {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  font-size: 12px; color: #909399;
+}
+.rec-notes { font-size: 12px; color: #a8abb2; margin-top: 3px; }
+.rec-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.rec-cost { font-size: 13px; font-weight: 600; color: #d97706; }
+
+/* ===== 评价统计 ===== */
+.review-stats-section {
+  background: #fff;
+  border-radius: 20px;
+  padding: 26px 30px;
+  margin-top: 24px;
+  border: 1px solid rgba(0,0,0,0.04);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 1px 2px rgba(0,0,0,0.02);
+}
+.review-overview {
+  display: grid;
+  grid-template-columns: 140px 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+.review-score-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.score-big {
+  font-size: 42px;
+  font-weight: 800;
+  color: #1a1a2e;
+  line-height: 1;
+}
+.score-stars { display: flex; gap: 2px; }
+.star-icon { font-size: 16px; color: #dcdfe6; }
+.star-icon.active { color: #f59e0b; }
+.score-total { font-size: 12px; color: #909399; margin-top: 4px; }
+
+.review-dist { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.dist-row { display: flex; align-items: center; gap: 8px; }
+.dist-label { font-size: 12px; color: #909399; width: 28px; text-align: right; flex-shrink: 0; }
+.dist-bar { flex: 1; height: 8px; background: #f5f7fa; border-radius: 4px; overflow: hidden; }
+.dist-fill { height: 100%; background: linear-gradient(90deg, #f59e0b, #fbbf24); border-radius: 4px; transition: width 0.6s ease; }
+.dist-count { font-size: 12px; color: #c0c4cc; width: 20px; flex-shrink: 0; }
+
+.review-tags-cloud { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+.tags-title { font-size: 14px; font-weight: 700; color: #303133; }
+.tags-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.cloud-tag {
+  padding: 6px 14px; border-radius: 14px; font-size: 13px;
+  background: linear-gradient(135deg, #f5f3ff, #ede9fe); color: #6d28d9;
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid #ddd6fe; font-weight: 500;
+  transition: all 0.2s; cursor: default;
+}
+.cloud-tag:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(139,92,246,0.15); }
+.tag-num {
+  font-weight: 800; color: #fff; font-size: 11px;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
+}
+
+.recent-reviews { border-top: 1px solid #f0f2f5; padding-top: 16px; }
+.review-item {
+  padding: 12px 0;
+  border-bottom: 1px solid #f8f9fc;
+}
+.review-item:last-child { border-bottom: none; }
+.review-item-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.reviewer-name { font-size: 13px; font-weight: 600; color: #303133; }
+.review-stars-sm { color: #f59e0b; font-size: 12px; }
+.review-date { font-size: 11px; color: #c0c4cc; margin-left: auto; }
+.review-item-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+.review-tag-sm {
+  padding: 2px 10px; border-radius: 10px; font-size: 12px;
+  background: linear-gradient(135deg, #f5f3ff, #ede9fe); color: #6d28d9;
+  border: 1px solid #e9e5f5; font-weight: 500;
+}
+.review-comment-sm { font-size: 13px; color: #606266; line-height: 1.5; margin: 0; }
+
 @media (max-width: 768px) {
   .detail-hero { padding: 20px; border-radius: 16px; }
   .hero-top { flex-direction: column; gap: 12px; align-items: flex-start; }
@@ -838,6 +1242,8 @@ onMounted(async () => {
   .activity-card { padding: 14px 16px; gap: 10px; }
   .act-type-badge { width: 36px; height: 36px; font-size: 16px; }
   .act-actions { opacity: 1; }
+  .review-overview { grid-template-columns: 1fr; }
+  .review-stats-section { padding: 20px; border-radius: 16px; }
 }
 
 @media (max-width: 480px) {

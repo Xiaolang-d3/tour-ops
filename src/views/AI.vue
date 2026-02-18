@@ -46,11 +46,21 @@ m<template>
             </div>
             <div class="msg-body">
               <div class="bubble" v-if="msg.role === 'user'">{{ msg.content }}</div>
-              <div class="bubble md-content" v-else v-html="renderMd(getDisplayContent(msg.content))"></div>
-              <div v-if="msg.role === 'assistant' && extractTripJson(msg.content)" class="bubble-action">
-                <el-button size="small" type="primary" round @click="openChatTripDialog(msg.content)">
-                  <el-icon><FolderAdd /></el-icon> 添加到行程
-                </el-button>
+              <div class="bubble md-content" v-else v-html="renderMd(msg.content)"></div>
+              <div v-if="msg.role === 'assistant'" class="bubble-tools">
+                <button class="copy-btn" @click="copyMsg(msg.content)" title="复制">
+                  <el-icon size="13"><DocumentCopy /></el-icon>
+                </button>
+                <button
+                  v-if="i === lastAssistantIdx && messages.length >= 4"
+                  class="chat-gen-btn"
+                  :disabled="chatGenerating"
+                  @click="handleChatGenerateTrip"
+                >
+                  <el-icon v-if="!chatGenerating" size="13"><FolderAdd /></el-icon>
+                  <el-icon v-else class="is-loading" size="13"><Loading /></el-icon>
+                  {{ chatGenerating ? '生成中...' : (chatTripData ? '保存行程' : '生成行程') }}
+                </button>
               </div>
             </div>
           </div>
@@ -289,7 +299,7 @@ m<template>
 import { ref, onMounted, nextTick, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { getChatHistory, clearChatHistory, aiChatStream, saveTripFromAI } from '@/api/ai'
+import { getChatHistory, clearChatHistory, aiChatStream, saveTripFromAI, chatGenerateTrip } from '@/api/ai'
 import { useAiStore } from '@/stores/ai'
 
 const router = useRouter()
@@ -313,6 +323,13 @@ const chatTripSaving = ref(false)
 const mobileTab = ref('chat')
 const showAllDays = ref(false)
 const genForm = aiStore.genForm
+
+const lastAssistantIdx = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') return i
+  }
+  return -1
+})
 
 const hotDests = ['云南', '三亚', '成都', '西安', '厦门', '桂林', '重庆', '杭州', '北京', '大理']
 
@@ -339,21 +356,11 @@ const quickPrompts = [
   { icon: '💰', text: '预算3000元能去哪里？' },
 ]
 
-function extractTripJson(content) {
-  if (!content) return null
-  const match = content.match(/<!--TRIP_JSON:([\s\S]*?)-->/)
-  if (!match) return null
-  try { return JSON.parse(match[1]) } catch { return null }
-}
-
-function getDisplayContent(content) {
-  if (!content) return ''
-  return content.replace(/<!--TRIP_JSON:[\s\S]*?-->/g, '').trim()
-}
-
 function renderMd(text) {
   if (!text) return ''
-  let html = text
+  // 清理可能残留的旧 TRIP_JSON 标记
+  let cleaned = text.replace(/<!--TRIP_JSON:[\s\S]*?-->/g, '').trim()
+  let html = cleaned
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -376,13 +383,36 @@ function renderMd(text) {
   return html
 }
 
-function openChatTripDialog(content) {
-  const data = extractTripJson(content)
-  if (!data) return
+const chatGenerating = ref(false)
+
+function openChatTripDialog(data) {
   chatTripData.value = data
   chatTripDateRange.value = null
   chatTripParticipants.value = 2
   chatTripDialogVisible.value = true
+}
+
+async function handleChatGenerateTrip() {
+  if (messages.value.length < 2) return ElMessage.warning('请先和 AI 聊几句，明确旅行需求')
+  // 已经生成过，直接弹保存对话框
+  if (chatTripData.value) {
+    chatTripDialogVisible.value = true
+    return
+  }
+  chatGenerating.value = true
+  try {
+    const history = messages.value.slice(-20).map(m => ({ role: m.role, content: m.content }))
+    const res = await chatGenerateTrip({ history })
+    if (res.success && res.trip) {
+      openChatTripDialog(res.trip)
+    } else {
+      ElMessage.warning(res.message || '未能生成行程，请继续补充需求')
+    }
+  } catch (e) {
+    ElMessage.error('生成失败，请稍后重试')
+  } finally {
+    chatGenerating.value = false
+  }
 }
 
 async function saveChatTrip() {
@@ -455,7 +485,17 @@ async function handleSend() {
   }
 }
 
-async function handleClear() { await clearChatHistory(); messages.value = []; ElMessage.success('已清空') }
+async function handleClear() { await clearChatHistory(); messages.value = []; chatTripData.value = null; ElMessage.success('已清空') }
+
+async function copyMsg(content) {
+  const text = (content || '').replace(/<!--TRIP_JSON:[\s\S]*?-->/g, '').trim()
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
 
 const actTypeEmoji = (t) => ({ transport: '🚌', attraction: '🏛️', meal: '🍽️', hotel: '🏨', free: '🎯' }[t] || '📌')
 
@@ -475,7 +515,8 @@ async function handleGenerate() {
 }
 
 async function handleSaveTrip() {
-  if (!suggestion.value || !genForm.dateRange) return
+  if (!suggestion.value) return
+  if (!genForm.dateRange) return ElMessage.warning('请先在上方选择出行日期')
   saving.value = true
   try {
     const res = await saveTripFromAI({
@@ -827,6 +868,53 @@ onMounted(loadHistory)
   color: #c0c4cc;
   margin-top: 8px;
 }
+
+.bubble-tools {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.msg:hover .bubble-tools { opacity: 1; }
+.copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #c0c4cc;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.copy-btn:hover {
+  background: #f0f0f5;
+  color: #7c3aed;
+}
+.chat-gen-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 12px;
+  border-radius: 10px;
+  border: 1.5px solid #ddd6fe;
+  background: linear-gradient(135deg, #faf8ff, #f5f3ff);
+  color: #7c3aed;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.chat-gen-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ede9fe, #e0e7ff);
+  border-color: #a78bfa;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.12);
+}
+.chat-gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== Markdown 渲染 ===== */
 .md-content :deep(h2), .md-content :deep(h3), .md-content :deep(h4), .md-content :deep(h5) {

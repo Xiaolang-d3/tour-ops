@@ -76,7 +76,7 @@ router.beforeEach(async (to, from, next) => {
 
   // 普通用户访问管理员页面 -> 重定向到用户首页
   if (to.matched.some(r => r.meta.requiresAdmin) && !isAdmin) {
-    return next('/trips')
+    return next('/dashboard')
   }
 
   next()
