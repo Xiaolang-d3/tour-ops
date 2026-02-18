@@ -6,6 +6,7 @@ from TourOps.models.trip import TripStatus
 
 class TripCreate(BaseModel):
     name: str
+    trip_type: str | None = None
     start_date: date
     end_date: date
     guest_count: int = 1
@@ -15,6 +16,7 @@ class TripCreate(BaseModel):
 
 class TripUpdate(BaseModel):
     name: str | None = None
+    trip_type: str | None = None
     start_date: date | None = None
     end_date: date | None = None
     guest_count: int | None = None
@@ -26,6 +28,7 @@ class TripUpdate(BaseModel):
 class TripResponse(BaseModel):
     id: int
     name: str
+    trip_type: str | None = None
     start_date: date
     end_date: date
     guest_count: int

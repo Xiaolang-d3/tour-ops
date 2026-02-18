@@ -15,6 +15,7 @@ class Trip(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
+    trip_type = Column(String(30))  # 行程类型：team_building/study_tour/leisure/business
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
     guest_count = Column(Integer, default=1)

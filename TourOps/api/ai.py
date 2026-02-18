@@ -661,6 +661,169 @@ async def save_trip_from_ai(
     return {"message": "行程已保存", "trip_id": trip.id}
 
 
+# ======================== AI 活动推荐（已有行程） ========================
+
+
+class RecommendRequest(BaseModel):
+    """为已有行程推荐活动"""
+    trip_id: int
+    day: int | None = None  # 指定某天，None 则推荐所有天
+
+
+class ChatToTripRequest(BaseModel):
+    """从对话历史生成行程"""
+    history: List[ChatMessage]
+
+
+@router.post("/chat/generate-trip")
+async def chat_generate_trip(
+    request: ChatToTripRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """根据聊天对话历史，AI 提取需求并生成结构化行程"""
+    if not request.history:
+        raise HTTPException(status_code=400, detail="对话历史为空")
+
+    messages = [
+        {"role": "system", "content": CHAT_TO_TRIP_SYSTEM_PROMPT},
+    ]
+
+    # 把对话历史作为上下文
+    for msg in request.history[-20:]:
+        messages.append({"role": msg.role, "content": msg.content})
+
+    messages.append({
+        "role": "user",
+        "content": "请根据以上对话内容，提取旅行需求并生成完整的行程安排。直接返回JSON，不要包含```json```标记。"
+    })
+
+    try:
+        result = await call_qwen_api(messages, timeout=120.0)
+        content = result["choices"][0]["message"]["content"]
+        data = extract_json_from_content(content)
+
+        if not data:
+            return {"success": False, "message": "AI 未能生成有效行程，请继续补充需求后重试"}
+
+        # 清洗数据
+        data.setdefault("title", "AI 生成行程")
+        data.setdefault("summary", "根据对话需求生成的行程方案")
+        data.setdefault("total_days", len(set(a.get("day", 1) for a in (data.get("activities") or []))) or 3)
+        data.setdefault("estimated_budget", 3000)
+        data.setdefault("tips", [])
+
+        raw_acts = data.get("activities") or data.get("itinerary") or data.get("schedule") or []
+        cleaned = []
+        for act in raw_acts:
+            if not isinstance(act, dict):
+                continue
+            cleaned.append({
+                "day": _safe_int(act.get("day", 1)),
+                "time": _normalize_time(act.get("time") or act.get("start_time") or "09:00"),
+                "type": _normalize_type(act.get("type") or act.get("activity_type") or "free"),
+                "name": act.get("name") or act.get("title") or "未命名活动",
+                "duration": str(act.get("duration") or "1小时"),
+                "location": act.get("location") or None,
+                "estimated_cost": _safe_int(act.get("estimated_cost") or act.get("cost") or 0),
+                "notes": act.get("notes") or None,
+            })
+        data["activities"] = cleaned
+
+        return {"success": True, "trip": data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AI chat_generate_trip] 失败: {type(e).__name__}: {e}")
+        return {"success": False, "message": "AI 服务暂时不可用，请稍后重试"}
+
+
+@router.post("/recommend-activities")
+async def recommend_activities(
+    req: RecommendRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """根据已有行程信息，AI推荐活动"""
+    from TourOps.models.trip import Trip
+    from TourOps.models.activity import Activity
+
+    trip = db.query(Trip).filter(Trip.id == req.trip_id, Trip.created_by == current_user.id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="行程不存在")
+
+    existing = db.query(Activity).filter(Activity.trip_id == trip.id).order_by(Activity.start_time).all()
+    total_days = (trip.end_date - trip.start_date).days + 1
+
+    # 构建已有活动描述
+    existing_desc = ""
+    if existing:
+        existing_desc = "\n已有活动：\n"
+        for act in existing:
+            day_num = (act.start_time.date() - trip.start_date).days + 1
+            existing_desc += f"  第{day_num}天 {act.start_time.strftime('%H:%M')} {act.name}（{act.type}）\n"
+
+    day_hint = f"请只推荐第{req.day}天的活动。" if req.day else "请为每天推荐活动。"
+
+    prompt = f"""请根据以下行程信息推荐合适的活动安排：
+
+行程名称：{trip.name}
+出行日期：{trip.start_date} 至 {trip.end_date}（共{total_days}天）
+出行人数：{trip.guest_count}人
+预算：{trip.budget or '未设定'}
+{existing_desc}
+{day_hint}
+请补充推荐缺少的活动（如景点、餐饮、交通、住宿等），避免与已有活动时间冲突。
+请直接返回JSON数组，不要包含```json```标记。
+
+JSON格式：
+[
+  {{"day": 1, "time": "09:00", "type": "attraction", "name": "活动名称", "duration": "2小时", "location": "地点", "estimated_cost": 100, "notes": "备注"}}
+]
+
+type只能是：transport/attraction/meal/hotel/free 五选一。"""
+
+    messages = [
+        {"role": "system", "content": "你是一个专业的旅行规划师。请根据已有行程信息推荐合适的活动，以纯JSON数组格式返回。"},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        result = await call_qwen_api(messages, stream=False, timeout=60.0)
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        data = extract_json_from_content(content)
+
+        if data is None:
+            return {"activities": [], "message": "AI未返回有效数据，请重试"}
+
+        # data 可能是 list 或 dict 包含 activities
+        acts = data if isinstance(data, list) else data.get("activities", [])
+
+        # 标准化
+        suggestions = []
+        for a in acts:
+            if not isinstance(a, dict):
+                continue
+            suggestions.append({
+                "day": _safe_int(a.get("day", 1)),
+                "time": _normalize_time(a.get("time", "09:00")),
+                "type": _normalize_type(a.get("type", "free")),
+                "name": a.get("name", "活动"),
+                "duration": a.get("duration", "1小时"),
+                "location": a.get("location"),
+                "estimated_cost": _safe_int(a.get("estimated_cost", 0)),
+                "notes": a.get("notes"),
+            })
+
+        return {"activities": suggestions}
+
+    except HTTPException:
+        raise
+    except Exception:
+        return {"activities": [], "message": "AI服务暂时不可用，请稍后重试"}
+
+
 
 
 # ======================== 提示词模板 ========================
@@ -694,21 +857,56 @@ JSON格式要求：
     "tips": ["注意事项1", "注意事项2"]
 }"""
 
-TRAVEL_ASSISTANT_SYSTEM_PROMPT = """你是TourOps旅行编排系统的AI助手。你擅长：
-1. 旅行行程规划和优化建议
-2. 目的地推荐和旅行攻略
-3. 预算分析和费用估算
-4. 景点、美食、住宿推荐
-5. 旅行注意事项和安全提示
+TRAVEL_ASSISTANT_SYSTEM_PROMPT = """你是TourOps旅行编排系统的AI助手，你的核心职责是通过对话帮助用户梳理旅行需求，最终生成满意的行程方案。
 
-请用友好、专业的语气回复。回复要简洁实用，避免过长的文字。
-如果用户的问题与旅行无关，礼貌地引导话题回到旅行相关内容。
+你的工作流程：
+1. 主动了解用户需求：目的地、出行日期/天数、人数、预算、出行类型（亲子/商务/休闲等）、兴趣偏好、特殊需求
+2. 针对用户提到的信息给出专业建议和推荐（景点、美食、住宿、注意事项等）
+3. 当关键信息（至少目的地和大致天数）基本明确后，主动总结已收集的需求，并询问用户："需求已经比较清楚了，是否要为您生成详细的行程方案？还是还有其他想法需要补充？"
+4. 如果用户说可以生成/确认了，告诉用户点击输入框旁边的「✨ 生成行程」按钮即可一键生成
 
-重要规则：当你为用户推荐或规划了具体的多天行程安排（包含每天的活动）时，请在回复文本的最末尾附加一段隐藏的JSON数据，格式如下：
-<!--TRIP_JSON:{"title":"行程标题","total_days":天数,"estimated_budget":人均预算整数,"activities":[{"day":1,"time":"09:00","type":"attraction","name":"活动名称","duration":"2小时","location":"地点","estimated_cost":100,"notes":"备注"}]}-->
+对话风格：
+- 友好、专业、简洁，不要长篇大论
+- 每次回复聚焦一两个问题，不要一次问太多
+- 适时给出推荐和建议，展现专业性
+- 如果用户的问题与旅行无关，礼貌地引导回旅行话题
 
-其中type只能是：transport/attraction/meal/hotel/free 五选一。
-只有当你的回复包含具体的、可执行的多天行程安排时才附加这段JSON。普通的问答、单个景点推荐、旅行建议等不需要附加。"""
+注意：不要在回复中直接输出结构化的行程表格或JSON数据。你的职责是对话和建议，正式的行程方案由系统的生成功能来完成。"""
+
+
+CHAT_TO_TRIP_SYSTEM_PROMPT = """你是一个专业的旅行规划师。请根据用户的对话历史，提取旅行需求并生成详细的行程安排。
+
+请仔细分析对话中提到的：目的地、出行日期/天数、人数、预算、兴趣偏好、特殊需求等信息。
+如果某些信息对话中未明确提及，请根据上下文合理推断。
+
+以纯JSON格式返回结果，不要包含任何markdown标记或```json```代码块。
+
+JSON格式要求：
+{
+    "title": "行程标题",
+    "summary": "行程概述（100字以内）",
+    "total_days": 天数整数,
+    "estimated_budget": 人均预算整数,
+    "activities": [
+        {
+            "day": 天数（从1开始），
+            "time": "HH:MM格式时间",
+            "type": "类型（transport/attraction/meal/hotel/free五选一）",
+            "name": "活动名称",
+            "duration": "时长描述",
+            "location": "地点",
+            "estimated_cost": 费用整数,
+            "notes": "备注说明"
+        }
+    ],
+    "tips": ["注意事项1", "注意事项2"]
+}
+
+要求：
+1. 活动安排要合理，考虑时间、距离、体力等因素
+2. 每天包含早中晚餐安排
+3. 需要包含交通和住宿安排
+4. 费用估算要合理"""
 
 
 def build_trip_prompt(demand: TripDemand) -> str:

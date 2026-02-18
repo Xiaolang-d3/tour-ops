@@ -1,10 +1,11 @@
 from fastapi import APIRouter
-from TourOps.api import auth, trips, activities, resources, templates, ai, public, export, share
+from TourOps.api import auth, trips, activities, resources, templates, ai, public, export, share, reviews
 
 api_router = APIRouter()
 
 # 公开接口（无需登录）
 api_router.include_router(public.router, prefix="/public", tags=["公开接口"])
+api_router.include_router(reviews.router, tags=["评价管理"])
 
 # 认证接口
 api_router.include_router(auth.router, prefix="/auth", tags=["认证"])
