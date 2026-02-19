@@ -104,6 +104,19 @@
           <span class="act-count" v-if="activities.length">{{ activities.length }}项</span>
         </h3>
         <div class="toolbar-right">
+          <!-- 视图切换 -->
+          <div class="view-toggle">
+            <el-tooltip content="时间线视图" placement="top">
+              <div class="view-toggle-btn" :class="{ active: viewMode === 'timeline' }" @click="viewMode = 'timeline'">
+                <el-icon size="16"><List /></el-icon>
+              </div>
+            </el-tooltip>
+            <el-tooltip content="日历视图" placement="top">
+              <div class="view-toggle-btn" :class="{ active: viewMode === 'calendar' }" @click="viewMode = 'calendar'">
+                <el-icon size="16"><Calendar /></el-icon>
+              </div>
+            </el-tooltip>
+          </div>
           <el-switch v-model="continuousMode" active-text="连续添加" size="small" />
           <el-button round @click="handleRecommend" :loading="recommending">
             ✨ AI 推荐
@@ -119,8 +132,11 @@
         <el-skeleton :rows="4" animated />
       </div>
 
-      <!-- 按天分组 -->
-      <template v-else-if="activities.length">
+      <!-- ========== 时间线视图（支持拖拽） ========== -->
+      <template v-else-if="activities.length && viewMode === 'timeline'">
+        <div class="drag-hint" v-if="activities.length > 1">
+          <el-icon size="14"><Rank /></el-icon> 拖拽活动卡片可调整顺序
+        </div>
         <div v-for="(dayActs, dayLabel) in groupedActivities" :key="dayLabel" class="day-group">
           <div class="day-header">
             <div class="day-indicator">
@@ -138,38 +154,81 @@
             </el-button>
           </div>
 
-          <div class="day-activities">
-            <div v-for="act in dayActs" :key="act.id" class="activity-card" @click="openActivityDialog(act)">
-              <div class="act-type-badge" :class="act.type">
-                {{ actTypeIcon(act.type) }}
+          <draggable
+            :list="dayActs"
+            item-key="id"
+            class="day-activities"
+            ghost-class="drag-ghost"
+            chosen-class="drag-chosen"
+            drag-class="drag-active"
+            handle=".drag-handle"
+            animation="250"
+            @end="onDragEnd(dayLabel)"
+          >
+            <template #item="{ element: act }">
+              <div class="activity-card" @click="openActivityDialog(act)">
+                <div class="drag-handle" @click.stop title="拖拽排序">
+                  <el-icon size="14"><Rank /></el-icon>
+                </div>
+                <div class="act-type-badge" :class="act.type">
+                  {{ actTypeIcon(act.type) }}
+                </div>
+                <div class="act-body">
+                  <div class="act-main-row">
+                    <span class="act-name">{{ act.name }}</span>
+                    <span v-if="act.cost" class="act-cost">¥{{ act.cost }}</span>
+                  </div>
+                  <div class="act-detail-row">
+                    <span class="act-time" v-if="formatHour(act.start_time)">
+                      <el-icon size="12"><Clock /></el-icon>
+                      {{ formatHour(act.start_time) }} - {{ formatHour(act.end_time) }}
+                    </span>
+                    <span class="act-location" v-if="act.location">
+                      <el-icon size="12"><Location /></el-icon>
+                      {{ act.location }}
+                    </span>
+                  </div>
+                  <div v-if="act.notes" class="act-notes">{{ act.notes }}</div>
+                  <div class="act-resources" v-if="act.guide_id || act.vehicle_id || act.hotel_id || act.restaurant_id">
+                    <span v-if="act.guide_id" class="act-resource-tag guide">👤 {{ getResourceName('guide', act.guide_id) }}</span>
+                    <span v-if="act.vehicle_id" class="act-resource-tag vehicle">🚌 {{ getResourceName('vehicle', act.vehicle_id) }}</span>
+                    <span v-if="act.hotel_id" class="act-resource-tag hotel">🏨 {{ getResourceName('hotel', act.hotel_id) }}</span>
+                    <span v-if="act.restaurant_id" class="act-resource-tag restaurant">🍽️ {{ getResourceName('restaurant', act.restaurant_id) }}</span>
+                  </div>
+                </div>
+                <div class="act-actions" @click.stop>
+                  <el-button text size="small" circle type="danger" @click="handleDeleteActivity(act.id)">
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
+                </div>
               </div>
-              <div class="act-body">
-                <div class="act-main-row">
-                  <span class="act-name">{{ act.name }}</span>
-                  <span v-if="act.cost" class="act-cost">¥{{ act.cost }}</span>
-                </div>
-                <div class="act-detail-row">
-                  <span class="act-time" v-if="formatHour(act.start_time)">
-                    <el-icon size="12"><Clock /></el-icon>
-                    {{ formatHour(act.start_time) }} - {{ formatHour(act.end_time) }}
-                  </span>
-                  <span class="act-location" v-if="act.location">
-                    <el-icon size="12"><Location /></el-icon>
-                    {{ act.location }}
-                  </span>
-                </div>
-                <div v-if="act.notes" class="act-notes">{{ act.notes }}</div>
-                <div class="act-resources" v-if="act.guide_id || act.vehicle_id || act.hotel_id || act.restaurant_id">
-                  <span v-if="act.guide_id" class="act-resource-tag guide">👤 {{ getResourceName('guide', act.guide_id) }}</span>
-                  <span v-if="act.vehicle_id" class="act-resource-tag vehicle">🚌 {{ getResourceName('vehicle', act.vehicle_id) }}</span>
-                  <span v-if="act.hotel_id" class="act-resource-tag hotel">🏨 {{ getResourceName('hotel', act.hotel_id) }}</span>
-                  <span v-if="act.restaurant_id" class="act-resource-tag restaurant">🍽️ {{ getResourceName('restaurant', act.restaurant_id) }}</span>
+            </template>
+          </draggable>
+        </div>
+      </template>
+
+      <!-- ========== 日历视图 ========== -->
+      <template v-else-if="activities.length && viewMode === 'calendar'">
+        <div class="calendar-view">
+          <div v-for="day in calendarDays" :key="day.date" class="calendar-day" :class="{ today: day.isToday, empty: !day.acts.length }">
+            <div class="calendar-day-header">
+              <span class="calendar-day-num">{{ day.dayNum }}</span>
+              <span class="calendar-day-label">第{{ day.tripDay }}天</span>
+              <span class="calendar-day-date">{{ day.dateLabel }}</span>
+              <el-button text size="small" class="calendar-day-add" @click="openActivityForDate(day.date)">
+                <el-icon size="12"><Plus /></el-icon>
+              </el-button>
+            </div>
+            <div class="calendar-day-body">
+              <div v-for="act in day.acts" :key="act.id" class="calendar-act" :class="act.type" @click="openActivityDialog(act)">
+                <span class="calendar-act-icon">{{ actTypeIcon(act.type) }}</span>
+                <div class="calendar-act-info">
+                  <span class="calendar-act-name">{{ act.name }}</span>
+                  <span class="calendar-act-time">{{ formatHour(act.start_time) }}-{{ formatHour(act.end_time) }}</span>
                 </div>
               </div>
-              <div class="act-actions" @click.stop>
-                <el-button text size="small" circle type="danger" @click="handleDeleteActivity(act.id)">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
+              <div v-if="!day.acts.length" class="calendar-empty">
+                <span>暂无安排</span>
               </div>
             </div>
           </div>
@@ -177,7 +236,7 @@
       </template>
 
       <!-- 空状态 -->
-      <div v-else class="empty-activities">
+      <div v-else-if="!activities.length" class="empty-activities">
         <div class="empty-icon">🗓️</div>
         <p class="empty-title">暂无活动安排</p>
         <p class="empty-desc">添加第一个活动，开始规划行程吧</p>
@@ -381,9 +440,10 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
+import draggable from 'vuedraggable'
 import {
   getTrip, updateTrip, getActivities, createActivity, updateActivity,
-  deleteActivity, exportPdf, exportExcel, getShareInfo, getQrcodeUrl
+  deleteActivity, reorderActivities, exportPdf, exportExcel, getShareInfo, getQrcodeUrl
 } from '@/api/trips'
 import { getTripReviews, getTripReviewStats } from '@/api/reviews'
 import { getGuides, getVehicles, getHotels, getRestaurants } from '@/api/resources'
@@ -403,6 +463,9 @@ const saving = ref(false)
 const shareInfo = ref(null)
 const actFormRef = ref(null)
 const continuousMode = ref(false)
+
+// 视图模式：timeline | calendar
+const viewMode = ref('timeline')
 
 const guides = ref([])
 const vehicles = ref([])
@@ -466,7 +529,11 @@ const getResourceName = (type, id) => {
 
 const groupedActivities = computed(() => {
   const groups = {}
-  const sorted = [...activities.value].sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+  const sorted = [...activities.value].sort((a, b) => {
+    // 先按 sort_order，再按 start_time
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+    return new Date(a.start_time) - new Date(b.start_time)
+  })
   for (const act of sorted) {
     const date = dayjs(act.start_time).format('YYYY-MM-DD')
     const dayNum = trip.value ? dayjs(date).diff(dayjs(trip.value.start_date), 'day') + 1 : 0
@@ -476,6 +543,66 @@ const groupedActivities = computed(() => {
   }
   return groups
 })
+
+// 日历视图数据：生成行程每一天的格子
+const calendarDays = computed(() => {
+  if (!trip.value) return []
+  const days = []
+  const start = dayjs(trip.value.start_date)
+  const end = dayjs(trip.value.end_date)
+  const today = dayjs().format('YYYY-MM-DD')
+  let cur = start
+  while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+    const dateStr = cur.format('YYYY-MM-DD')
+    const dayActs = activities.value
+      .filter(a => dayjs(a.start_time).format('YYYY-MM-DD') === dateStr)
+      .sort((a, b) => {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+        return new Date(a.start_time) - new Date(b.start_time)
+      })
+    days.push({
+      date: dateStr,
+      dayNum: cur.format('D'),
+      tripDay: cur.diff(start, 'day') + 1,
+      dateLabel: cur.format('M月D日'),
+      isToday: dateStr === today,
+      acts: dayActs,
+    })
+    cur = cur.add(1, 'day')
+  }
+  return days
+})
+
+// 拖拽结束后同步排序到后端
+async function onDragEnd(dayLabel) {
+  const dayActs = groupedActivities.value[dayLabel]
+  if (!dayActs) return
+  const items = dayActs.map((act, idx) => ({ id: act.id, sort_order: idx }))
+  try {
+    await reorderActivities(tripId.value, items)
+    // 同步本地 sort_order
+    items.forEach(item => {
+      const act = activities.value.find(a => a.id === item.id)
+      if (act) act.sort_order = item.sort_order
+    })
+  } catch {
+    ElMessage.error('排序保存失败')
+    // 回滚：重新加载
+    activities.value = await getActivities(tripId.value)
+  }
+}
+
+// 日历视图中按日期添加活动
+function openActivityForDate(dateStr) {
+  editingActivity.value = null
+  Object.assign(actForm, {
+    type: 'attraction', name: '', date: dateStr,
+    startHour: new Date('2000-01-01T09:00'), endHour: new Date('2000-01-01T12:00'),
+    location: '', cost: null, notes: '',
+    guide_id: null, vehicle_id: null, hotel_id: null, restaurant_id: null
+  })
+  showActivity.value = true
+}
 
 const shareUrl = computed(() => shareInfo.value ? `${window.location.origin}/share/${shareInfo.value.share_code}` : '')
 const qrcodeBlobUrl = ref(null)
@@ -1112,6 +1239,171 @@ onMounted(async () => {
 .empty-title { font-size: 16px; font-weight: 600; color: #303133; margin-bottom: 6px; }
 .empty-desc { font-size: 13px; color: #909399; margin-bottom: 20px; }
 
+/* ===== 视图切换 ===== */
+.view-toggle {
+  display: flex;
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.view-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #909399;
+  transition: all 0.2s;
+}
+.view-toggle-btn:hover { color: #606266; background: #eef0f4; }
+.view-toggle-btn.active {
+  background: #fff;
+  color: #7c3aed;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* ===== 拖拽相关 ===== */
+.drag-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #c0c4cc;
+  margin-bottom: 16px;
+  padding: 6px 12px;
+  background: #fafbfd;
+  border-radius: 8px;
+  border: 1px dashed #e8e8ed;
+}
+.drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  flex-shrink: 0;
+  color: #dcdfe6;
+  cursor: grab;
+  transition: color 0.2s;
+  margin-right: 4px;
+}
+.drag-handle:hover { color: #8b5cf6; }
+.drag-handle:active { cursor: grabbing; }
+.drag-ghost {
+  opacity: 0.4;
+  background: #f5f3ff;
+  border: 2px dashed #a78bfa;
+  border-radius: 14px;
+}
+.drag-chosen {
+  box-shadow: 0 8px 24px rgba(139,92,246,0.15);
+  border-color: #a78bfa;
+}
+.drag-active {
+  opacity: 0.9;
+  transform: rotate(1deg);
+}
+
+/* ===== 日历视图 ===== */
+.calendar-view {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.calendar-day {
+  background: #fafbfd;
+  border-radius: 14px;
+  border: 1px solid #f0f2f5;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+.calendar-day:hover { border-color: #e0e0e8; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+.calendar-day.today { border-color: #a78bfa; background: #faf8ff; }
+.calendar-day.empty { opacity: 0.7; }
+.calendar-day-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #fff;
+  border-bottom: 1px solid #f0f2f5;
+}
+.calendar-day.today .calendar-day-header { background: #f5f3ff; }
+.calendar-day-num {
+  font-size: 20px;
+  font-weight: 800;
+  color: #1a1a2e;
+  line-height: 1;
+}
+.calendar-day.today .calendar-day-num { color: #7c3aed; }
+.calendar-day-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7c3aed;
+  background: #ede9fe;
+  padding: 1px 8px;
+  border-radius: 6px;
+}
+.calendar-day-date {
+  font-size: 11px;
+  color: #a8abb2;
+}
+.calendar-day-add {
+  margin-left: auto;
+  color: #c0c4cc;
+  padding: 2px;
+}
+.calendar-day-add:hover { color: #7c3aed; }
+.calendar-day-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 60px;
+}
+.calendar-act {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fff;
+  border: 1px solid #f0f2f5;
+}
+.calendar-act:hover { transform: translateX(2px); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+.calendar-act.transport { border-left: 3px solid #f97316; }
+.calendar-act.attraction { border-left: 3px solid #10b981; }
+.calendar-act.meal { border-left: 3px solid #ef4444; }
+.calendar-act.hotel { border-left: 3px solid #8b5cf6; }
+.calendar-act.free { border-left: 3px solid #3b82f6; }
+.calendar-act-icon { font-size: 16px; flex-shrink: 0; }
+.calendar-act-info { flex: 1; min-width: 0; }
+.calendar-act-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a1a2e;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-act-time {
+  font-size: 11px;
+  color: #a8abb2;
+}
+.calendar-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  font-size: 12px;
+  color: #dcdfe6;
+}
+
 /* ===== AI 推荐列表 ===== */
 .recommend-list {
   display: flex;
@@ -1237,13 +1529,15 @@ onMounted(async () => {
   .detail-stats { grid-template-columns: 1fr 1fr; }
   .activities-section { padding: 20px; border-radius: 16px; }
   .section-toolbar { flex-direction: column; gap: 12px; align-items: flex-start; }
-  .toolbar-right { width: 100%; justify-content: space-between; }
+  .toolbar-right { width: 100%; justify-content: space-between; flex-wrap: wrap; }
   .day-activities { padding-left: 14px; }
   .activity-card { padding: 14px 16px; gap: 10px; }
   .act-type-badge { width: 36px; height: 36px; font-size: 16px; }
   .act-actions { opacity: 1; }
   .review-overview { grid-template-columns: 1fr; }
   .review-stats-section { padding: 20px; border-radius: 16px; }
+  .calendar-view { grid-template-columns: 1fr 1fr; }
+  .drag-handle { display: none; }
 }
 
 @media (max-width: 480px) {
@@ -1256,5 +1550,6 @@ onMounted(async () => {
   .activity-card { flex-direction: column; gap: 8px; padding: 12px 14px; }
   .act-main-row { flex-direction: column; align-items: flex-start; gap: 4px; }
   .act-detail-row { flex-direction: column; gap: 4px; }
+  .calendar-view { grid-template-columns: 1fr; }
 }
 </style>
