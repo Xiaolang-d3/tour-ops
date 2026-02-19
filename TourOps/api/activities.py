@@ -37,6 +37,30 @@ def _verify_trip_ownership(trip_id: int, user: User, db: Session) -> Trip:
     return trip
 
 
+@router.put("/{trip_id}/activities/reorder")
+def reorder_activities(trip_id: int, request: ReorderRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """批量更新活动排序"""
+    _verify_trip_ownership(trip_id, current_user, db)
+    for item in request.items:
+        activity = db.query(Activity).filter(Activity.id == item.id, Activity.trip_id == trip_id).first()
+        if activity:
+            activity.sort_order = item.sort_order
+    db.commit()
+    return {"message": "排序更新成功", "count": len(request.items)}
+
+
+@router.post("/{trip_id}/activities/check-conflict")
+def check_time_conflict(trip_id: int, request: ConflictCheckRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """检测活动时间冲突"""
+    _verify_trip_ownership(trip_id, current_user, db)
+    from datetime import datetime
+    service = ConflictService(db)
+    start_time = datetime.fromisoformat(request.start_time)
+    end_time = datetime.fromisoformat(request.end_time)
+    conflicts = service.check_time_conflict(trip_id, start_time, end_time, request.exclude_activity_id)
+    return {"has_conflict": len(conflicts) > 0, "conflicts": conflicts}
+
+
 @router.get("/{trip_id}/activities", response_model=List[ActivityResponse])
 def list_activities(trip_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """获取行程下的活动列表"""
@@ -85,27 +109,3 @@ def delete_activity(trip_id: int, activity_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="活动不存在")
     service.delete(activity)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.put("/{trip_id}/activities/reorder")
-def reorder_activities(trip_id: int, request: ReorderRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """批量更新活动排序"""
-    _verify_trip_ownership(trip_id, current_user, db)
-    for item in request.items:
-        activity = db.query(Activity).filter(Activity.id == item.id, Activity.trip_id == trip_id).first()
-        if activity:
-            activity.sort_order = item.sort_order
-    db.commit()
-    return {"message": "排序更新成功", "count": len(request.items)}
-
-
-@router.post("/{trip_id}/activities/check-conflict")
-def check_time_conflict(trip_id: int, request: ConflictCheckRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """检测活动时间冲突"""
-    _verify_trip_ownership(trip_id, current_user, db)
-    from datetime import datetime
-    service = ConflictService(db)
-    start_time = datetime.fromisoformat(request.start_time)
-    end_time = datetime.fromisoformat(request.end_time)
-    conflicts = service.check_time_conflict(trip_id, start_time, end_time, request.exclude_activity_id)
-    return {"has_conflict": len(conflicts) > 0, "conflicts": conflicts}

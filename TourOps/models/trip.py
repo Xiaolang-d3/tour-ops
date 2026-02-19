@@ -24,6 +24,7 @@ class Trip(Base):
     special_requirements = Column(JSON)  # 特殊需求
     status = Column(Enum(TripStatus), default=TripStatus.DRAFT)
     share_code = Column(String(32), unique=True, index=True)  # 分享码
+    partner_confirmations = Column(JSON)  # 合作伙伴确认反馈 [{name, role, confirmed_at, note}]
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
