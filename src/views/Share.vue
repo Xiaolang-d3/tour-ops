@@ -45,6 +45,58 @@
         <p>暂无活动安排</p>
       </div>
 
+      <!-- ========== 合作伙伴确认区域 ========== -->
+      <div class="partner-zone">
+        <div class="zone-title">
+          <span class="zone-icon">🤝</span>
+          <span>合作伙伴确认</span>
+        </div>
+
+        <!-- 已确认列表 -->
+        <div v-if="confirmations.length" class="confirm-list">
+          <div v-for="(c, i) in confirmations" :key="i" class="confirm-item">
+            <div class="confirm-avatar">{{ c.role[0] }}</div>
+            <div class="confirm-body">
+              <div class="confirm-top">
+                <span class="confirm-name">{{ c.name }}</span>
+                <el-tag size="small" type="success" effect="plain" round>{{ c.role }}</el-tag>
+                <span class="confirm-time">{{ fmtDate(c.confirmed_at) }}</span>
+              </div>
+              <p v-if="c.note" class="confirm-note">{{ c.note }}</p>
+            </div>
+            <div class="confirm-check">✅</div>
+          </div>
+        </div>
+        <div v-else class="confirm-empty">暂无合作伙伴确认</div>
+
+        <!-- 提交确认表单 -->
+        <div v-if="!confirmSubmitted" class="confirm-form-card">
+          <div class="form-header">
+            <span class="form-title">📝 提交确认</span>
+            <span class="form-hint">合作伙伴可在此确认参与本次行程</span>
+          </div>
+          <div class="confirm-form-fields">
+            <el-input v-model="confirmForm.name" placeholder="您的姓名/公司名称" maxlength="50" class="confirm-input" />
+            <el-select v-model="confirmForm.role" placeholder="选择角色" class="confirm-input">
+              <el-option label="车队" value="车队" />
+              <el-option label="酒店" value="酒店" />
+              <el-option label="导游" value="导游" />
+              <el-option label="餐厅" value="餐厅" />
+              <el-option label="其他" value="其他" />
+            </el-select>
+            <el-input v-model="confirmForm.note" type="textarea" :rows="2" placeholder="备注说明（选填）" maxlength="200" />
+            <el-button type="primary" round :loading="confirmSubmitting" :disabled="!confirmForm.name || !confirmForm.role" @click="handleConfirmSubmit" style="width:100%">
+              确认参与
+            </el-button>
+          </div>
+        </div>
+        <div v-else class="submit-success">
+          <div class="success-emoji">✅</div>
+          <h3>确认已提交</h3>
+          <p>感谢您的确认反馈</p>
+        </div>
+      </div>
+
       <!-- ========== 评价区域 ========== -->
       <div class="review-zone">
         <div class="zone-title">
@@ -175,7 +227,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import dayjs from 'dayjs'
-import { getSharedTrip } from '@/api/public'
+import { getSharedTrip, submitPartnerConfirm, getPartnerConfirmations } from '@/api/public'
 import { submitPublicReview, getPublicReviews } from '@/api/reviews'
 import { ElMessage } from 'element-plus'
 
@@ -186,6 +238,12 @@ const reviews = ref([])
 const submitted = ref(false)
 const submitting = ref(false)
 const hoverRating = ref(0)
+
+// 合作伙伴确认
+const confirmations = ref([])
+const confirmSubmitted = ref(false)
+const confirmSubmitting = ref(false)
+const confirmForm = reactive({ name: '', role: '', note: '' })
 
 const positiveTags = [
   { label: '👍 行程合理', value: '行程合理' },
@@ -263,6 +321,24 @@ async function handleSubmit() {
   finally { submitting.value = false }
 }
 
+async function handleConfirmSubmit() {
+  if (!confirmForm.name || !confirmForm.role) return
+  confirmSubmitting.value = true
+  try {
+    await submitPartnerConfirm(route.params.code, {
+      name: confirmForm.name, role: confirmForm.role, note: confirmForm.note || null,
+    })
+    confirmSubmitted.value = true
+    ElMessage.success('确认提交成功')
+    await loadConfirmations()
+  } catch { ElMessage.error('提交失败，请重试') }
+  finally { confirmSubmitting.value = false }
+}
+
+async function loadConfirmations() {
+  try { confirmations.value = await getPartnerConfirmations(route.params.code) } catch {}
+}
+
 async function loadReviews() {
   try { reviews.value = await getPublicReviews(route.params.code) } catch {}
 }
@@ -270,7 +346,7 @@ async function loadReviews() {
 onMounted(async () => {
   try {
     trip.value = await getSharedTrip(route.params.code)
-    await loadReviews()
+    await Promise.all([loadReviews(), loadConfirmations()])
   } catch { error.value = true }
 })
 </script>
@@ -347,6 +423,39 @@ onMounted(async () => {
 .act-bottom { display: flex; flex-wrap: wrap; gap: 12px; }
 .act-loc, .act-note { font-size: 12px; color: #909399; }
 .empty-acts { text-align: center; padding: 40px 0; color: #c0c4cc; }
+
+/* ========== 合作伙伴确认区域 ========== */
+.partner-zone {
+  background: #fff;
+  border-radius: 18px;
+  padding: 28px;
+  border: 1px solid #eef0f4;
+  margin-bottom: 24px;
+}
+.confirm-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.confirm-item {
+  display: flex; gap: 12px; align-items: center;
+  padding: 14px 16px; background: #f0fdf4; border-radius: 12px; border: 1px solid #d1fae5;
+}
+.confirm-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+  color: #059669; font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.confirm-body { flex: 1; min-width: 0; }
+.confirm-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.confirm-name { font-size: 14px; font-weight: 600; color: #303133; }
+.confirm-time { font-size: 11px; color: #c0c4cc; margin-left: auto; }
+.confirm-note { font-size: 12px; color: #606266; margin: 4px 0 0; }
+.confirm-check { font-size: 18px; flex-shrink: 0; }
+.confirm-empty { text-align: center; padding: 20px 0; color: #c0c4cc; font-size: 13px; margin-bottom: 16px; }
+
+.confirm-form-card {
+  background: #fafbfd; border-radius: 14px; padding: 24px; border: 1px solid #eef0f4;
+}
+.confirm-form-fields { display: flex; flex-direction: column; gap: 12px; }
+.confirm-input { width: 100%; }
 
 /* ========== 评价区域 ========== */
 .review-zone {

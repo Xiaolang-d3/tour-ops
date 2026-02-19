@@ -25,7 +25,8 @@ const routes = [
       { path: 'trips', name: 'AdminTrips', component: () => import('@/views/AdminTrips.vue') },
       { path: 'users', name: 'AdminUsers', component: () => import('@/views/Users.vue') },
       { path: 'resources', name: 'AdminResources', component: () => import('@/views/Resources.vue') },
-      { path: 'templates', name: 'AdminTemplates', component: () => import('@/views/Templates.vue') }
+      { path: 'templates', name: 'AdminTemplates', component: () => import('@/views/Templates.vue') },
+      { path: 'reviews', name: 'AdminReviews', component: () => import('@/views/AdminReviews.vue') }
     ]
   },
   // 普通用户路由

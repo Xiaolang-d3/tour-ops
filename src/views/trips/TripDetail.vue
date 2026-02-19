@@ -375,6 +375,31 @@
       </template>
     </el-dialog>
 
+    <!-- 合作伙伴确认状态 -->
+    <div v-if="trip.partner_confirmations?.length" class="partner-status-section">
+      <div class="section-toolbar">
+        <h3 class="section-title">
+          <span class="title-icon">🤝</span> 合作伙伴确认
+          <span class="act-count">{{ trip.partner_confirmations.length }}个</span>
+        </h3>
+      </div>
+      <div class="partner-cards">
+        <div v-for="(c, i) in trip.partner_confirmations" :key="i" class="partner-card">
+          <div class="partner-card-icon">✅</div>
+          <div class="partner-card-body">
+            <div class="partner-card-top">
+              <span class="partner-card-name">{{ c.name }}</span>
+              <el-tag size="small" effect="plain" round>{{ c.role }}</el-tag>
+            </div>
+            <div class="partner-card-meta">
+              <span v-if="c.note" class="partner-card-note">{{ c.note }}</span>
+              <span class="partner-card-time">{{ c.confirmed_at?.slice(0, 16).replace('T', ' ') }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 评价统计区域 -->
     <div v-if="reviewStats && reviewStats.total > 0" class="review-stats-section">
       <div class="section-toolbar">
@@ -1552,4 +1577,22 @@ onMounted(async () => {
   .act-detail-row { flex-direction: column; gap: 4px; }
   .calendar-view { grid-template-columns: 1fr; }
 }
+
+/* ========== 合作伙伴确认状态 ========== */
+.partner-status-section {
+  background: #fff; border-radius: 18px; padding: 24px 28px;
+  border: 1px solid #eef0f4; margin-top: 20px;
+}
+.partner-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.partner-card {
+  display: flex; gap: 12px; align-items: center;
+  padding: 14px 16px; background: #f0fdf4; border-radius: 12px; border: 1px solid #d1fae5;
+}
+.partner-card-icon { font-size: 20px; flex-shrink: 0; }
+.partner-card-body { flex: 1; min-width: 0; }
+.partner-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.partner-card-name { font-size: 14px; font-weight: 600; color: #303133; }
+.partner-card-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.partner-card-note { font-size: 12px; color: #606266; }
+.partner-card-time { font-size: 11px; color: #c0c4cc; }
 </style>
