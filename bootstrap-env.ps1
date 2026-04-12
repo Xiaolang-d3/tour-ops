@@ -25,6 +25,93 @@ function Write-Step {
     Write-Host "[bootstrap] $Message"
 }
 
+function Get-PythonVersion {
+    param([string]$Command)
+
+    if (-not $Command) {
+        return $null
+    }
+
+    $arguments = @()
+    $filePath = $Command
+
+    if ($Command.StartsWith("py ")) {
+        $parts = $Command.Split(" ", 2)
+        $filePath = $parts[0]
+        if ($parts.Count -gt 1) {
+            $arguments += $parts[1]
+        }
+    }
+
+    try {
+        $output = & $filePath @arguments -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')" 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $output) {
+            return $null
+        }
+
+        return [version]($output | Select-Object -First 1).Trim()
+    } catch {
+        return $null
+    }
+}
+
+function Test-SupportedPythonVersion {
+    param([version]$Version)
+
+    return $Version -and $Version.Major -eq 3 -and $Version.Minor -ge 10 -and $Version.Minor -le 12
+}
+
+function Get-CompatiblePythonCommand {
+    $localPython = Join-Path $PythonDir "python.exe"
+    if (Test-Path -LiteralPath $localPython) {
+        $localVersion = Get-PythonVersion -Command $localPython
+        if (Test-SupportedPythonVersion -Version $localVersion) {
+            return $localPython
+        }
+    }
+
+    $launcher = Get-Command py -ErrorAction SilentlyContinue
+    if ($launcher) {
+        foreach ($candidate in @("py -3.11", "py -3.12", "py -3.10", "py -3")) {
+            $candidateVersion = Get-PythonVersion -Command $candidate
+            if (Test-SupportedPythonVersion -Version $candidateVersion) {
+                return $candidate
+            }
+        }
+    }
+
+    $systemPython = Get-Command python -ErrorAction SilentlyContinue
+    if ($systemPython) {
+        $systemVersion = Get-PythonVersion -Command $systemPython.Source
+        if (Test-SupportedPythonVersion -Version $systemVersion) {
+            return $systemPython.Source
+        }
+    }
+
+    return $null
+}
+
+function Start-PythonProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$ArgumentList
+    )
+
+    $filePath = $Command
+    $arguments = @()
+
+    if ($Command.StartsWith("py ")) {
+        $parts = $Command.Split(" ", 2)
+        $filePath = $parts[0]
+        if ($parts.Count -gt 1) {
+            $arguments += $parts[1]
+        }
+    }
+
+    $arguments += $ArgumentList
+    return Start-Process -FilePath $filePath -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+}
+
 function Ensure-Directory {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -49,22 +136,7 @@ function Download-File {
 }
 
 function Get-PythonCommand {
-    $localPython = Join-Path $PythonDir "python.exe"
-    if (Test-Path -LiteralPath $localPython) {
-        return $localPython
-    }
-
-    $systemPython = Get-Command python -ErrorAction SilentlyContinue
-    if ($systemPython) {
-        return $systemPython.Source
-    }
-
-    $launcher = Get-Command py -ErrorAction SilentlyContinue
-    if ($launcher) {
-        return "py -3"
-    }
-
-    return $null
+    return Get-CompatiblePythonCommand
 }
 
 function Ensure-ConfigFile {
@@ -82,8 +154,10 @@ function Ensure-ConfigFile {
 }
 
 function Ensure-Python {
-    if (Get-PythonCommand) {
-        Write-Step "Python runtime already available"
+    $pythonCommand = Get-PythonCommand
+    if ($pythonCommand) {
+        $pythonVersionInfo = Get-PythonVersion -Command $pythonCommand
+        Write-Step "Compatible Python runtime already available ($pythonVersionInfo)"
         return
     }
 
@@ -113,6 +187,21 @@ function Ensure-Python {
     }
 
     Write-Step "Local Python installed at $PythonDir"
+}
+
+function Assert-CompatibleExistingVenv {
+    $venvPython = Join-Path $ApiDir ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        return
+    }
+
+    $venvVersion = Get-PythonVersion -Command $venvPython
+    if (Test-SupportedPythonVersion -Version $venvVersion) {
+        return
+    }
+
+    $versionLabel = if ($venvVersion) { $venvVersion.ToString() } else { "unknown version" }
+    throw "Existing backend virtual environment uses Python $versionLabel. Current backend dependency pins support Python 3.10-3.12. Delete $ApiDir\.venv and rerun deploy.bat so bootstrap can recreate it with Python 3.11.9."
 }
 
 function Ensure-Node {
@@ -149,7 +238,9 @@ function Ensure-Node {
 function Ensure-Venv {
     $venvPython = Join-Path $ApiDir ".venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venvPython) {
-        Write-Step "Backend virtual environment already exists"
+        Assert-CompatibleExistingVenv
+        $venvVersion = Get-PythonVersion -Command $venvPython
+        Write-Step "Backend virtual environment already exists ($venvVersion)"
         return
     }
 
@@ -159,11 +250,7 @@ function Ensure-Venv {
     }
 
     Write-Step "Creating backend virtual environment"
-    if ($pythonCommand -eq "py -3") {
-        $process = Start-Process -FilePath "py" -ArgumentList @("-3", "-m", "venv", (Join-Path $ApiDir ".venv")) -Wait -PassThru -NoNewWindow
-    } else {
-        $process = Start-Process -FilePath $pythonCommand -ArgumentList @("-m", "venv", (Join-Path $ApiDir ".venv")) -Wait -PassThru -NoNewWindow
-    }
+    $process = Start-PythonProcess -Command $pythonCommand -ArgumentList @("-m", "venv", (Join-Path $ApiDir ".venv"))
 
     if ($process.ExitCode -ne 0) {
         throw "Virtual environment creation failed with code $($process.ExitCode)"
@@ -180,6 +267,7 @@ Ensure-Directory -Path $ToolsDir
 Ensure-Directory -Path $DownloadsDir
 
 Ensure-ConfigFile
+Assert-CompatibleExistingVenv
 Ensure-Python
 Ensure-Node
 Ensure-Venv
