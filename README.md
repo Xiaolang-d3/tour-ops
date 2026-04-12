@@ -30,6 +30,19 @@
 - JWT 认证
 - Pydantic 2.x
 
+## Windows Scripts
+
+- `setup-env.bat`: bootstrap, environment checks, and dependency installation
+- `deploy.bat`: start the backend and frontend after the environment is ready
+- `deploy-core.bat`: internal shared workflow script used by the two entrypoints
+
+Recommended order on Windows:
+
+```bat
+setup-env.bat
+deploy.bat
+```
+
 ## Python 版本说明
 
 - 推荐使用 Python 3.11.x

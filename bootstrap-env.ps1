@@ -201,7 +201,7 @@ function Assert-CompatibleExistingVenv {
     }
 
     $versionLabel = if ($venvVersion) { $venvVersion.ToString() } else { "unknown version" }
-    throw "Existing backend virtual environment uses Python $versionLabel. Current backend dependency pins support Python 3.10-3.12. Delete $ApiDir\.venv and rerun deploy.bat so bootstrap can recreate it with Python 3.11.9."
+    throw "Existing backend virtual environment uses Python $versionLabel. Current backend dependency pins support Python 3.10-3.12. Delete $ApiDir\.venv and rerun setup-env.bat so bootstrap can recreate it with Python 3.11.9."
 }
 
 function Ensure-Node {
