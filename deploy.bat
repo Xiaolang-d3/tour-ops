@@ -17,9 +17,21 @@ if defined ESC (
     set "RESET="
 )
 
-for %%I in ("%~dp0.") do set "ROOT_DIR=%%~fI"
+for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
+set "ROOT_DIR=%SCRIPT_DIR%"
 set "API_DIR=%ROOT_DIR%\TourOps-api-server"
 set "WEB_DIR=%ROOT_DIR%\TourOps-web"
+
+if exist "%SCRIPT_DIR%\TourOps\main.py" if exist "%SCRIPT_DIR%\requirements.txt" (
+    for %%I in ("%SCRIPT_DIR%\..") do set "ROOT_DIR=%%~fI"
+    set "API_DIR=%SCRIPT_DIR%"
+    if exist "%ROOT_DIR%\TourOps-web" (
+        set "WEB_DIR=%ROOT_DIR%\TourOps-web"
+    ) else (
+        set "WEB_DIR=%SCRIPT_DIR%\..\TourOps-web"
+    )
+)
+
 set "CONFIG_FILE=%API_DIR%\TourOps\config\config.yaml"
 set "CONFIG_EXAMPLE=%API_DIR%\TourOps\config\config.example.yaml"
 set "TOOLS_DIR=%ROOT_DIR%\.tools"
@@ -27,6 +39,7 @@ set "DOWNLOAD_DIR=%TOOLS_DIR%\downloads"
 set "PYTHON_LOCAL_DIR=%TOOLS_DIR%\python311"
 set "NODE_LOCAL_DIR=%TOOLS_DIR%\node-v20.20.2-win-x64"
 set "BOOTSTRAP_SCRIPT=%ROOT_DIR%\bootstrap-env.ps1"
+if not exist "%BOOTSTRAP_SCRIPT%" set "BOOTSTRAP_SCRIPT=%API_DIR%\bootstrap-env.ps1"
 set "ERRORS=0"
 set "EXIT_CODE=0"
 set "MODE=%~1"
