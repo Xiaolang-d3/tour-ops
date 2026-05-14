@@ -6,6 +6,9 @@
         <span class="page-subtitle">{{ isAdminView ? '维护可复用的行程模板' : '选择模板快速创建行程' }}</span>
       </div>
       <div class="page-header-right">
+        <el-button v-if="isAdminView" class="ai-template-btn" round @click="openAiTemplateDialog">
+          <el-icon><MagicStick /></el-icon> AI 生成模板
+        </el-button>
         <el-button v-if="isAdminView" type="primary" round @click="openCreateTemplate">
           <el-icon><Plus /></el-icon> 新建模板
         </el-button>
@@ -230,6 +233,9 @@
               <h3>基础信息</h3>
               <p>设置模板在模板库中的名称、分类和行程跨度。</p>
             </div>
+            <el-button class="ai-mini-btn" round @click="openAiTemplateDialog">
+              <el-icon><MagicStick /></el-icon> AI 生成草稿
+            </el-button>
           </div>
           <div class="editor-grid three">
             <el-form-item label="模板名称" prop="name">
@@ -287,7 +293,7 @@
               <div class="activity-day-head">
                 <span>第{{ day.day }}天</span>
                 <em>{{ day.activities.length }} 项</em>
-                <el-button link type="primary" @click="addActivity(day.day)">
+                <el-button class="day-add-btn" size="small" round @click="addActivity(day.day)">
                   <el-icon><Plus /></el-icon> 添加
                 </el-button>
               </div>
@@ -323,10 +329,7 @@
                     </el-form-item>
                   </div>
                   <div class="activity-row-actions">
-                    <el-button text type="primary" @click="copyActivity(act)">
-                      <el-icon><CopyDocument /></el-icon>
-                    </el-button>
-                    <el-button text type="danger" @click="removeActivity(act.uid)">
+                    <el-button class="activity-icon-btn delete" title="删除活动" @click="removeActivity(act.uid)">
                       <el-icon><Delete /></el-icon>
                     </el-button>
                   </div>
@@ -355,7 +358,7 @@
                     </el-form-item>
                   </div>
                   <div class="activity-row-actions">
-                    <el-button text type="danger" @click="removeActivity(act.uid)">
+                    <el-button class="activity-icon-btn delete" title="删除活动" @click="removeActivity(act.uid)">
                       <el-icon><Delete /></el-icon>
                     </el-button>
                   </div>
@@ -379,6 +382,55 @@
         </div>
       </template>
     </el-drawer>
+
+    <el-dialog v-model="showAiTemplateDialog" title="AI 生成模板草稿" width="520px" destroy-on-close>
+      <el-form :model="aiTemplateForm" :rules="aiTemplateRules" ref="aiTemplateFormRef" label-position="top">
+        <div class="ai-template-tip">
+          输入模板方向，AI 会生成一版可编辑的模板草稿，不会直接保存到模板库。
+        </div>
+        <div class="editor-grid two">
+          <el-form-item label="目的地" prop="destination">
+            <el-input v-model="aiTemplateForm.destination" placeholder="例如：云南、北京、成都" clearable />
+          </el-form-item>
+          <el-form-item label="模板分类" prop="category">
+            <el-select v-model="aiTemplateForm.category" style="width:100%">
+              <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="行程天数" prop="duration_days">
+            <el-input-number v-model="aiTemplateForm.duration_days" :min="1" :max="30" controls-position="right" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="默认人数" prop="participants">
+            <el-input-number v-model="aiTemplateForm.participants" :min="1" :max="200" controls-position="right" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="最低预算">
+            <el-input v-model.number="aiTemplateForm.budget_min" type="number" min="0">
+              <template #prefix>¥</template>
+            </el-input>
+          </el-form-item>
+          <el-form-item label="最高预算">
+            <el-input v-model.number="aiTemplateForm.budget_max" type="number" min="0">
+              <template #prefix>¥</template>
+            </el-input>
+          </el-form-item>
+        </div>
+        <el-form-item label="补充要求">
+          <el-input
+            v-model="aiTemplateForm.special_needs"
+            type="textarea"
+            :rows="3"
+            placeholder="例如：适合亲子、节奏轻松、每天安排午休、包含特色餐饮"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAiTemplateDialog = false">取消</el-button>
+        <el-button type="primary" :loading="aiGeneratingTemplate" @click="handleGenerateTemplateByAi">
+          <el-icon v-if="!aiGeneratingTemplate"><MagicStick /></el-icon>
+          {{ aiGeneratingTemplate ? '生成中...' : '生成草稿' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -387,6 +439,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getTemplates, createTemplate, updateTemplate, deleteTemplate, createTripFromTemplate } from '@/api/templates'
+import { generateTrip } from '@/api/ai'
 
 const router = useRouter()
 const route = useRoute()
@@ -400,6 +453,8 @@ const showUse = ref(false)
 const creating = ref(false)
 const showTemplateDialog = ref(false)
 const savingTemplate = ref(false)
+const showAiTemplateDialog = ref(false)
+const aiGeneratingTemplate = ref(false)
 const selectedTemplate = ref(null)
 const editingTemplate = ref(null)
 const preservedContent = ref({})
@@ -407,6 +462,7 @@ const activityIdSeed = ref(1)
 const useFormRef = ref(null)
 const useForm = reactive({ name: '', start_date: '', guest_count: 1 })
 const templateFormRef = ref(null)
+const aiTemplateFormRef = ref(null)
 const templateForm = reactive({
   name: '',
   category: 'family',
@@ -414,6 +470,15 @@ const templateForm = reactive({
   guest_count: 1,
   budget: null,
   activities: []
+})
+const aiTemplateForm = reactive({
+  destination: '',
+  category: 'family',
+  duration_days: 3,
+  participants: 4,
+  budget_min: 3000,
+  budget_max: 8000,
+  special_needs: ''
 })
 
 const isAdminView = computed(() => route.path.startsWith('/admin'))
@@ -438,6 +503,13 @@ const templateRules = {
   category: [{ required: true, message: '请选择模板分类', trigger: 'change' }],
   duration_days: [{ required: true, message: '请输入行程天数', trigger: 'change' }],
   guest_count: [{ required: true, message: '请输入默认人数', trigger: 'change' }]
+}
+
+const aiTemplateRules = {
+  destination: [{ required: true, message: '请输入目的地', trigger: 'blur' }],
+  category: [{ required: true, message: '请选择模板分类', trigger: 'change' }],
+  duration_days: [{ required: true, message: '请输入行程天数', trigger: 'change' }],
+  participants: [{ required: true, message: '请输入默认人数', trigger: 'change' }]
 }
 
 const useRules = {
@@ -565,6 +637,100 @@ function toEditorActivity(act = {}, day = 1) {
   }
 }
 
+function formatDate(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function addDays(date, days) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function openAiTemplateDialog() {
+  if (showTemplateDialog.value && (templateForm.name || templateForm.activities.length)) {
+    aiTemplateForm.category = templateForm.category || 'family'
+    aiTemplateForm.duration_days = Number(templateForm.duration_days || 3)
+    aiTemplateForm.participants = Number(templateForm.guest_count || 4)
+    aiTemplateForm.budget_min = Math.max(0, Math.round(Number(templateForm.budget || 3000) * 0.7))
+    aiTemplateForm.budget_max = Math.max(aiTemplateForm.budget_min + 1000, Math.round(Number(templateForm.budget || 8000) * 1.2))
+  }
+  showAiTemplateDialog.value = true
+}
+
+function mapAiActivity(act = {}, index = 0) {
+  const time = act.time || act.start_time || '09:00'
+  const durationText = String(act.duration || '')
+  const hourMatch = durationText.match(/(\d+(?:\.\d+)?)/)
+  let endTime = act.end_time || ''
+  if (!endTime && time && hourMatch) {
+    const [h, m = '0'] = String(time).split(':')
+    const start = new Date(2000, 0, 1, Number(h || 9), Number(m || 0))
+    start.setMinutes(start.getMinutes() + Number(hourMatch[1]) * 60)
+    endTime = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`
+  }
+  return toEditorActivity({
+    day: act.day || 1,
+    type: act.type || 'attraction',
+    name: act.name || `AI 活动 ${index + 1}`,
+    start_time: time,
+    end_time: endTime,
+    location: act.location || '',
+    cost: act.estimated_cost ?? act.cost ?? null,
+    notes: act.notes || ''
+  }, act.day || 1)
+}
+
+async function handleGenerateTemplateByAi() {
+  const valid = await aiTemplateFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  if (Number(aiTemplateForm.budget_max || 0) < Number(aiTemplateForm.budget_min || 0)) {
+    ElMessage.error('最高预算不能小于最低预算')
+    return
+  }
+
+  aiGeneratingTemplate.value = true
+  try {
+    const start = new Date()
+    const days = Number(aiTemplateForm.duration_days || 1)
+    const suggestion = await generateTrip({
+      trip_type: aiTemplateForm.category,
+      start_date: formatDate(start),
+      end_date: formatDate(addDays(start, days - 1)),
+      participants: Number(aiTemplateForm.participants || 1),
+      budget_min: Number(aiTemplateForm.budget_min || 0),
+      budget_max: Number(aiTemplateForm.budget_max || 0),
+      destination: aiTemplateForm.destination,
+      interests: [],
+      special_needs: aiTemplateForm.special_needs || undefined
+    })
+
+    editingTemplate.value = null
+    preservedContent.value = {
+      summary: suggestion.summary,
+      tips: suggestion.tips || []
+    }
+    templateForm.name = suggestion.title || `${aiTemplateForm.destination}${days}日${categoryLabel(aiTemplateForm.category)}模板`
+    templateForm.category = aiTemplateForm.category
+    templateForm.duration_days = Number(suggestion.total_days || days)
+    templateForm.guest_count = Number(aiTemplateForm.participants || 1)
+    templateForm.budget = suggestion.estimated_budget ?? aiTemplateForm.budget_max ?? null
+    templateForm.activities = (suggestion.activities || []).map(mapAiActivity)
+
+    if (!templateForm.activities.length) addActivity(1)
+    showAiTemplateDialog.value = false
+    showTemplateDialog.value = true
+    ElMessage.success('AI 模板草稿已生成，可继续编辑后保存')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || 'AI 生成失败，请稍后重试')
+  } finally {
+    aiGeneratingTemplate.value = false
+  }
+}
+
 function openCreateTemplate() {
   editingTemplate.value = null
   resetTemplateForm()
@@ -592,10 +758,6 @@ function openEditTemplate(tpl) {
 function addActivity(day) {
   const targetDay = Number(day || 1)
   templateForm.activities.push(toEditorActivity({ day: Math.min(Math.max(targetDay, 1), Number(templateForm.duration_days || 1)) }, targetDay))
-}
-
-function copyActivity(act) {
-  templateForm.activities.push(toEditorActivity({ ...act, name: `${act.name || '未命名活动'} 副本` }, act.day))
 }
 
 function removeActivity(uid) {
@@ -727,6 +889,26 @@ onMounted(loadTemplates)
 .page-title { font-size: 22px; font-weight: 800; color: #1a1a2e; margin: 0; letter-spacing: 0; }
 .page-subtitle { font-size: 13px; color: #a8abb2; font-weight: 500; }
 .search-input { width: 220px; }
+.ai-template-btn,
+.ai-mini-btn {
+  border: none;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b, #8b5cf6);
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.18);
+}
+.ai-template-btn:hover,
+.ai-mini-btn:hover {
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 7px 20px rgba(139, 92, 246, 0.26);
+}
+.ai-mini-btn {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
 
 .filter-bar { margin-bottom: 24px; }
 .filter-chips { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -1023,6 +1205,15 @@ onMounted(loadTemplates)
 }
 .editor-grid.two { grid-template-columns: repeat(2, 1fr); }
 .editor-grid.three { grid-template-columns: 1.4fr 1fr 0.8fr; }
+.ai-template-tip {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
 .activities-empty {
   text-align: center;
   padding: 34px 16px;
@@ -1055,6 +1246,21 @@ onMounted(loadTemplates)
   font-weight: 500;
   margin-right: auto;
 }
+.day-add-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid #ddd6fe;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font-size: 12px;
+  font-weight: 700;
+}
+.day-add-btn:hover {
+  border-color: #8b5cf6;
+  background: #ede9fe;
+  color: #5b21b6;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.14);
+}
 .activity-list { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .activity-editor-row {
   position: relative;
@@ -1079,6 +1285,32 @@ onMounted(loadTemplates)
   top: 28px;
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+.activity-icon-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.activity-icon-btn.delete {
+  border-color: #fecaca;
+  color: #dc2626;
+  background: #fff7f7;
+}
+.activity-icon-btn.delete:hover {
+  border-color: #f87171;
+  color: #991b1b;
+  background: #fee2e2;
+  box-shadow: 0 5px 14px rgba(220, 38, 38, 0.14);
 }
 .activity-field.is-error :deep(.el-input__wrapper),
 .activity-field.is-error :deep(.el-input-number__decrease),
