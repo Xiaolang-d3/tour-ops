@@ -172,6 +172,14 @@
       </el-steps>
 
       <el-form v-show="step === 0" :model="form" :rules="formRules" ref="formRef" label-width="80px">
+        <el-form-item label="行程类型" prop="trip_type">
+          <div class="type-picker">
+            <div v-for="t in tripTypes" :key="t.value" class="type-option" :class="{ active: form.trip_type === t.value }" @click="form.trip_type = t.value">
+              <span class="type-emoji">{{ t.icon }}</span>
+              <span class="type-name">{{ t.label }}</span>
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="行程名称" prop="name">
           <el-input v-model="form.name" placeholder="如：云南7日游" maxlength="50" show-word-limit />
         </el-form-item>
@@ -188,6 +196,11 @@
           <el-input v-model.number="form.budget" placeholder="选填，单位：元" type="number">
             <template #prefix>¥</template>
           </el-input>
+        </el-form-item>
+        <el-form-item label="兴趣方向">
+          <div class="interest-picker">
+            <span v-for="tag in interestOptions" :key="tag" class="interest-chip" :class="{ active: form.interests.includes(tag) }" @click="toggleInterest(tag)">{{ tag }}</span>
+          </div>
         </el-form-item>
       </el-form>
 
@@ -222,6 +235,31 @@
               <el-radio-button value="business_car">商务车</el-radio-button>
               <el-radio-button value="self_drive">自驾</el-radio-button>
             </el-radio-group>
+          </el-form-item>
+          <!-- 场景专属字段 -->
+          <template v-if="form.trip_type === 'team_building'">
+            <el-form-item label="团建主题">
+              <el-input v-model="form.custom1" placeholder="如：年度团建、新人融入、部门拓展" />
+            </el-form-item>
+            <el-form-item label="公司名称">
+              <el-input v-model="form.custom2" placeholder="选填" />
+            </el-form-item>
+          </template>
+          <template v-else-if="form.trip_type === 'study_tour'">
+            <el-form-item label="研学主题">
+              <el-input v-model="form.custom1" placeholder="如：历史文化、自然科学、红色教育" />
+            </el-form-item>
+            <el-form-item label="学生年龄">
+              <el-input v-model="form.custom2" placeholder="如：10-12岁" />
+            </el-form-item>
+          </template>
+          <template v-else-if="form.trip_type === 'business'">
+            <el-form-item label="商务目的">
+              <el-input v-model="form.custom1" placeholder="如：客户考察、会议接待" />
+            </el-form-item>
+          </template>
+          <el-form-item label="自定义备注">
+            <el-input v-model="form.custom3" placeholder="其他补充需求" />
           </el-form-item>
           <el-form-item label="特殊需求">
             <el-input v-model="form.special" type="textarea" :rows="2" placeholder="如：有老人小孩、需要轮椅通道等" />
@@ -265,9 +303,26 @@ const showShare = ref(false)
 const shareUrl = ref('')
 
 const form = reactive({
-  name: '', dateRange: null, guest_count: 1, budget: null,
-  pace: 'moderate', accommodation: 'comfort', dining: [], transport: 'bus', special: ''
+  name: '', dateRange: null, guest_count: 1, budget: null, trip_type: 'leisure',
+  interests: [],
+  pace: 'moderate', accommodation: 'comfort', dining: [], transport: 'bus', special: '',
+  custom1: '', custom2: '', custom3: ''
 })
+
+const tripTypes = [
+  { value: 'leisure', label: '常规旅游', icon: '🏖️' },
+  { value: 'team_building', label: '企业团建', icon: '🤝' },
+  { value: 'study_tour', label: '主题研学', icon: '📚' },
+  { value: 'business', label: '商务考察', icon: '💼' },
+]
+
+const interestOptions = ['自然风光', '历史文化', '美食体验', '户外运动', '休闲度假', '亲子互动', '摄影打卡', '民俗体验']
+
+function toggleInterest(tag) {
+  const idx = form.interests.indexOf(tag)
+  if (idx >= 0) form.interests.splice(idx, 1)
+  else form.interests.push(tag)
+}
 
 const formRules = {
   name: [{ required: true, message: '请输入行程名称', trigger: 'blur' }],
@@ -339,7 +394,12 @@ function getTripProgress(trip) {
 
 function openCreateDialog() {
   step.value = 0
-  Object.assign(form, { name: '', dateRange: null, guest_count: 1, budget: null, pace: 'moderate', accommodation: 'comfort', dining: [], transport: 'bus', special: '' })
+  Object.assign(form, {
+    name: '', dateRange: null, guest_count: 1, budget: null, trip_type: 'leisure',
+    interests: [],
+    pace: 'moderate', accommodation: 'comfort', dining: [], transport: 'bus', special: '',
+    custom1: '', custom2: '', custom3: ''
+  })
   showCreate.value = true
 }
 
@@ -361,10 +421,27 @@ async function handleCreate(withPrefs) {
   }
   creating.value = true
   try {
-    const payload = { name: form.name, start_date: form.dateRange[0], end_date: form.dateRange[1], guest_count: form.guest_count, budget: form.budget || null }
+    const payload = {
+      name: form.name, start_date: form.dateRange[0], end_date: form.dateRange[1],
+      guest_count: form.guest_count, budget: form.budget || null,
+      trip_type: form.trip_type || null,
+    }
     if (withPrefs) {
-      payload.preferences = { pace: form.pace, accommodation: form.accommodation, dining: form.dining, transport: form.transport }
-      if (form.special) payload.special_requirements = { notes: form.special }
+      payload.preferences = {
+        pace: form.pace, accommodation: form.accommodation,
+        dining: form.dining, transport: form.transport,
+        interests: form.interests,
+      }
+      const customFields = {}
+      if (form.custom1) customFields.custom1 = form.custom1
+      if (form.custom2) customFields.custom2 = form.custom2
+      if (form.custom3) customFields.custom3 = form.custom3
+      if (form.special) customFields.notes = form.special
+      if (Object.keys(customFields).length) payload.special_requirements = customFields
+    } else {
+      if (form.interests.length) {
+        payload.preferences = { interests: form.interests }
+      }
     }
     const res = await createTrip(payload)
     showCreate.value = false
@@ -546,6 +623,37 @@ onMounted(loadTrips)
 /* 偏好步骤 */
 .pref-step { padding: 0 10px; }
 .pref-hint { color: #909399; font-size: 13px; margin-bottom: 20px; }
+
+/* 行程类型选择 */
+.type-picker { display: flex; gap: 10px; flex-wrap: wrap; }
+.type-option {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 14px 20px; border-radius: 14px; cursor: pointer;
+  background: #f8f9fc; border: 2px solid transparent;
+  transition: all 0.25s ease; min-width: 80px;
+}
+.type-option:hover { background: #f0f2f8; }
+.type-option.active {
+  background: #ede9fe; border-color: #8b5cf6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.12);
+}
+.type-emoji { font-size: 24px; }
+.type-name { font-size: 12px; font-weight: 600; color: #606266; }
+.type-option.active .type-name { color: #7c3aed; }
+
+/* 兴趣标签 */
+.interest-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.interest-chip {
+  padding: 6px 14px; border-radius: 20px; font-size: 13px;
+  background: #f5f7fa; color: #606266; cursor: pointer;
+  border: 1px solid transparent; transition: all 0.2s ease;
+  user-select: none;
+}
+.interest-chip:hover { border-color: #c0c4cc; }
+.interest-chip.active {
+  background: #ede9fe; color: #7c3aed; border-color: #c4b5fd;
+  font-weight: 500;
+}
 
 /* 动画 */
 .card-list-enter-active { transition: all 0.4s cubic-bezier(0.4,0,0.2,1); }

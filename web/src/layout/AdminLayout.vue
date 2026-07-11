@@ -53,6 +53,10 @@
           <el-icon><Files /></el-icon>
           <template #title>模板库</template>
         </el-menu-item>
+        <el-menu-item index="/admin/reviews">
+          <el-icon><ChatDotSquare /></el-icon>
+          <template #title>评价分析</template>
+        </el-menu-item>
       </el-menu>
 
       <div class="sidebar-footer">
@@ -181,7 +185,8 @@ const pageTitle = computed(() => {
     '/admin/trips': '行程管理',
     '/admin/users': '用户管理',
     '/admin/resources': '资源管理',
-    '/admin/templates': '模板库'
+    '/admin/templates': '模板库',
+    '/admin/reviews': '评价分析'
   }
   return map[route.path] || '管理后台'
 })
